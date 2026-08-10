@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Cấu hình — Lead Phone Collector{% endblock %}
+{% block page_title %}⚙️ Cấu hình{% endblock %}
+
+{% block content %}
+<div class="settings-grid">
+  <!-- Google Sheets -->
+  <div class="card">
+    <div class="card__header">
+      <h2 class="card__title">📊 Google Sheets</h2>
+      <span class="badge {% if config.sheets_configured %}badge--success{% else %}badge--warning{% endif %}">
+        {% if config.sheets_configured %}Đã cấu hình{% else %}Chưa cấu hình{% endif %}
+      </span>
+    </div>
+    <div class="card__body">
+      <div class="setting-row">
+        <div class="setting-label">Sheet ID</div>
+        <div class="setting-value">{{ config.google_sheet_id or '(chưa có)' }}</div>
+      </div>
+      <div class="setting-row">
+        <div class="setting-label">Sheet Name</div>
+        <div class="setting-value">{{ config.google_sheet_name }}</div>
+      </div>
+      <div class="setting-hint">
+        Để cấu hình: chỉnh file <code>.env</code> và thêm Service Account JSON vào
+        <code>config/google-service-account.json</code>.
+        <a href="https://docs.google.com/spreadsheets" target="_blank">→ Mở Google Sheets</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Facebook -->
+  <div class="card">
+    <div class="card__header">
+      <h2 class="card__title">📘 Facebook Graph API</h2>
+      <span class="badge {% if config.facebook_token_configured %}badge--success{% else %}badge--info{% endif %}">
+        {% if config.facebook_token_configured %}Có Token{% else %}Dùng Selenium{% endif %}
+      </span>
+    </div>
+    <div class="card__body">
+      <div class="setting-row">
+        <div class="setting-label">Access Token</div>
+        <div class="setting-value">
+          {% if config.facebook_token_configured %}
+            <span class="text-success">✓ Đã cấu hình</span>
+          {% else %}
+            <span class="text-muted">Không có (dùng Selenium public)</span>
+          {% endif %}
+        </div>
+      </div>
+      <div class="setting-hint">
+        Token chỉ cần thiết để thu thập từ Page do bạn quản lý qua Graph API.
+        <a href="https://developers.facebook.com/tools/explorer/" target="_blank">→ Facebook Explorer</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Selenium -->
+  <div class="card">
+    <div class="card__header">
+      <h2 class="card__title">🌐 Selenium</h2>
+    </div>
+    <div class="card__body">
+      <div class="setting-row">
+        <div class="setting-label">Headless mode</div>
+        <div class="setting-value">
+          <span class="badge {% if config.selenium_headless %}badge--success{% else %}badge--warning{% endif %}">
+            {{ 'Bật (ẩn browser)' if config.selenium_headless else 'Tắt (thấy browser)' }}
+          </span>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div class="setting-label">Delay giữa requests</div>
+        <div class="setting-value">{{ config.delay_min }}s – {{ config.delay_max }}s</div>
+      </div>
+      <div class="setting-hint">
+        Để thay đổi: chỉnh <code>SELENIUM_HEADLESS</code>, <code>SELENIUM_DELAY_MIN/MAX</code> trong <code>.env</code>.
+      </div>
+    </div>
+  </div>
+
+  <!-- Hướng dẫn -->
+  <div class="card">
+    <div class="card__header">
+      <h2 class="card__title">📖 Hướng dẫn nhanh</h2>
+    </div>
+    <div class="card__body">
+      <ol class="guide-list">
+        <li>Copy <code>.env.example</code> thành <code>.env</code></li>
+        <li>Tạo Google Cloud Project + enable Sheets API</li>
+        <li>Tạo Service Account → download JSON → đặt vào <code>config/</code></li>
+        <li>Share Google Sheet cho email Service Account</li>
+        <li>Điền <code>GOOGLE_SHEET_ID</code> vào <code>.env</code></li>
+        <li>Khởi động lại server: <code>python main.py ui</code></li>
+      </ol>
+      <a href="{{ url_for('static', filename='../../../docs/02-setup-guide.md') }}"
+         class="btn btn--outline btn--sm">Xem tài liệu đầy đủ</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

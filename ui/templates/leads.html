@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+{% block title %}Danh sách Leads — Lead Phone Collector{% endblock %}
+{% block page_title %}📋 Danh sách Leads{% endblock %}
+
+{% block topbar_actions %}
+<div class="export-btns">
+  <a href="{{ url_for('export_excel', source=filters.source, status=filters.status) }}"
+     class="btn btn--success btn--sm">📥 Excel</a>
+  <a href="{{ url_for('export_csv', source=filters.source, status=filters.status) }}"
+     class="btn btn--outline btn--sm">📄 CSV</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<!-- Filter Bar -->
+<div class="card mb-4">
+  <div class="card__body">
+    <form method="GET" action="{{ url_for('leads_page') }}" class="filter-form">
+      <div class="filter-row">
+        <div class="filter-group">
+          <label class="form-label">Tìm kiếm</label>
+          <input type="text" name="search" class="form-input form-input--sm"
+                 value="{{ filters.search }}" placeholder="Tên, SĐT, địa chỉ...">
+        </div>
+        <div class="filter-group">
+          <label class="form-label">Nguồn</label>
+          <select name="source" class="form-select">
+            <option value="">Tất cả</option>
+            <option value="google_maps" {% if filters.source == 'google_maps' %}selected{% endif %}>Google Maps</option>
+            <option value="fb_selenium_post" {% if filters.source == 'fb_selenium_post' %}selected{% endif %}>FB Posts</option>
+            <option value="fb_selenium_comment" {% if filters.source == 'fb_selenium_comment' %}selected{% endif %}>FB Comments</option>
+            <option value="fb_selenium_about" {% if filters.source == 'fb_selenium_about' %}selected{% endif %}>FB About</option>
+            <option value="fb_graph_post" {% if filters.source == 'fb_graph_post' %}selected{% endif %}>FB Graph API</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label class="form-label">Trạng thái</label>
+          <select name="status" class="form-select">
+            <option value="">Tất cả</option>
+            <option value="new" {% if filters.status == 'new' %}selected{% endif %}>Mới</option>
+            <option value="contacted" {% if filters.status == 'contacted' %}selected{% endif %}>Đã liên hệ</option>
+            <option value="qualified" {% if filters.status == 'qualified' %}selected{% endif %}>Tiềm năng</option>
+            <option value="rejected" {% if filters.status == 'rejected' %}selected{% endif %}>Loại bỏ</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label class="form-label">Nhà mạng</label>
+          <select name="carrier" class="form-select">
+            <option value="">Tất cả</option>
+            <option value="Viettel" {% if filters.carrier == 'Viettel' %}selected{% endif %}>Viettel</option>
+            <option value="Mobifone" {% if filters.carrier == 'Mobifone' %}selected{% endif %}>Mobifone</option>
+            <option value="Vinaphone" {% if filters.carrier == 'Vinaphone' %}selected{% endif %}>Vinaphone</option>
+            <option value="Vietnamobile" {% if filters.carrier == 'Vietnamobile' %}selected{% endif %}>Vietnamobile</option>
+          </select>
+        </div>
+        <div class="filter-group filter-group--btn">
+          <button type="submit" class="btn btn--primary btn--sm">Lọc</button>
+          <a href="{{ url_for('leads_page') }}" class="btn btn--outline btn--sm">Xóa lọc</a>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Leads Table -->
+<div class="card">
+  <div class="card__header">
+    <h2 class="card__title">{{ leads|length }} leads (trang {{ page }})</h2>
+  </div>
+  <div class="card__body p-0">
+    {% if leads %}
+    <div class="table-wrapper">
+      <table class="table table--leads" id="leads-table">
+        <thead>
+          <tr>
+            <th>SĐT</th>
+            <th>Tên</th>
+            <th>Nhà mạng</th>
+            <th>Nguồn</th>
+            <th>Địa chỉ</th>
+            <th>Trạng thái</th>
+            <th>Ngày</th>
+            <th>Hành động</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for lead in leads %}
+          <tr data-lead-id="{{ lead.id }}" class="lead-row status-{{ lead.status }}">
+            <td>
+              <div class="phone-cell">
+                <strong class="phone-number">{{ lead.phone_normalized }}</strong>
+                {% if lead.source_url %}
+                <a href="{{ lead.source_url }}" target="_blank" class="source-link" title="Nguồn">🔗</a>
+                {% endif %}
+              </div>
+            </td>
+            <td class="text-truncate" style="max-width:160px" title="{{ lead.name }}">
+              {{ lead.name or '—' }}
+            </td>
+            <td>
+              <span class="badge badge--carrier-{{ (lead.carrier or '').lower() }}">
+                {{ lead.carrier or '?' }}
+              </span>
+            </td>
+            <td>
+              <span class="source-tag source-tag--{{ lead.source }}">
+                {{ lead.source|replace('_', ' ') }}
+              </span>
+            </td>
+            <td class="text-truncate text-muted" style="max-width:180px" title="{{ lead.address }}">
+              {{ lead.address or '—' }}
+            </td>
+            <td>
+              <select class="status-select" data-lead-id="{{ lead.id }}" onchange="updateStatus(this)">
+                <option value="new" {% if lead.status == 'new' %}selected{% endif %}>🆕 Mới</option>
+                <option value="contacted" {% if lead.status == 'contacted' %}selected{% endif %}>📞 Đã gọi</option>
+                <option value="qualified" {% if lead.status == 'qualified' %}selected{% endif %}>✅ Tiềm năng</option>
+                <option value="rejected" {% if lead.status == 'rejected' %}selected{% endif %}>❌ Loại</option>
+              </select>
+            </td>
+            <td class="text-muted text-sm">
+              {{ (lead.collected_at or '')[:10] }}
+            </td>
+            <td>
+              <button class="btn btn--ghost btn--xs" data-phone="{{ lead.phone_normalized }}" onclick="copyPhone(this.dataset.phone)"
+                      title="Copy SĐT">📋</button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Pagination -->
+    <div class="pagination">
+      {% if page > 1 %}
+      <a href="?{{ request.query_string.decode() }}&page={{ page - 1 }}" class="btn btn--outline btn--sm">← Trước</a>
+      {% endif %}
+      <span class="pagination__info">Trang {{ page }}</span>
+      {% if leads|length >= per_page %}
+      <a href="?{{ request.query_string.decode() }}&page={{ page + 1 }}" class="btn btn--outline btn--sm">Sau →</a>
+      {% endif %}
+    </div>
+
+    {% else %}
+    <div class="empty-state">
+      <div class="empty-state__icon">📭</div>
+      <div class="empty-state__text">Chưa có leads nào</div>
+      <a href="{{ url_for('index') }}" class="btn btn--primary">Bắt đầu thu thập</a>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function updateStatus(selectEl) {
+  const leadId = selectEl ? selectEl.dataset.leadId : null;
+  const status = selectEl ? selectEl.value : null;
+  if (!leadId || !status) return;
+
+  try {
+    const resp = await fetch(`/api/leads/${leadId}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      const row = document.querySelector(`tr[data-lead-id="${leadId}"]`);
+      if (row) row.className = `lead-row status-${status}`;
+      showToast('Đã cập nhật trạng thái ✓');
+    }
+  } catch (e) {
+    showToast('Lỗi cập nhật', 'error');
+  }
+}
+
+function copyPhone(phone) {
+  if (!phone) return;
+  navigator.clipboard.writeText(phone).then(() => showToast(`Đã copy: ${phone}`));
+}
+
+function showToast(msg, type = 'success') {
+  const toast = document.createElement('div');
+  toast.className = `toast toast--${type}`;
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.classList.add('toast--show'), 10);
+  setTimeout(() => { toast.classList.remove('toast--show'); setTimeout(() => toast.remove(), 300); }, 2500);
+}
+</script>
+{% endblock %}

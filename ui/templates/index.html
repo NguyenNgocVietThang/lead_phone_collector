@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Lead Phone Collector{% endblock %}
+{% block page_title %}🏠 Dashboard{% endblock %}
+
+{% block content %}
+<!-- Stats Cards -->
+<div class="stats-grid">
+  <div class="stat-card stat-card--primary">
+    <div class="stat-card__icon">📞</div>
+    <div class="stat-card__body">
+      <div class="stat-card__value">{{ stats.total }}</div>
+      <div class="stat-card__label">Tổng leads</div>
+    </div>
+  </div>
+  <div class="stat-card stat-card--success">
+    <div class="stat-card__icon">🆕</div>
+    <div class="stat-card__body">
+      <div class="stat-card__value">{{ stats.today }}</div>
+      <div class="stat-card__label">Hôm nay</div>
+    </div>
+  </div>
+  <div class="stat-card stat-card--info">
+    <div class="stat-card__icon">🗺️</div>
+    <div class="stat-card__body">
+      <div class="stat-card__value">{{ stats.by_source.get('google_maps', 0) }}</div>
+      <div class="stat-card__label">Từ Google Maps</div>
+    </div>
+  </div>
+  <div class="stat-card stat-card--purple">
+    <div class="stat-card__icon">📘</div>
+    <div class="stat-card__body">
+      <div class="stat-card__value">
+        {{ (stats.by_source.get('fb_selenium_post', 0) +
+            stats.by_source.get('fb_selenium_comment', 0) +
+            stats.by_source.get('fb_graph_post', 0) +
+            stats.by_source.get('fb_selenium_about', 0)) }}
+      </div>
+      <div class="stat-card__label">Từ Facebook</div>
+    </div>
+  </div>
+</div>
+
+<!-- Collect Forms -->
+<div class="collect-grid">
+  <!-- Google Maps Form -->
+  <div class="card">
+    <div class="card__header">
+      <h2 class="card__title">🗺️ Thu thập từ Google Maps</h2>
+    </div>
+    <div class="card__body">
+      <form method="POST" action="{{ url_for('collect_maps') }}" id="form-maps">
+        <div class="form-group">
+          <label class="form-label" for="keyword">Từ khóa tìm kiếm *</label>
+          <input type="text" id="keyword" name="keyword" class="form-input"
+                 placeholder="VD: nhà hàng, spa, phòng khám..." required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="area">Khu vực</label>
+          <input type="text" id="area" name="area" class="form-input"
+                 placeholder="VD: Hà Nội, TP HCM, Đà Nẵng...">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="limit">Số lượng tối đa</label>
+          <input type="number" id="limit" name="limit" class="form-input"
+                 value="50" min="5" max="200">
+        </div>
+        <button type="submit" class="btn btn--primary btn--full" id="btn-maps">
+          <span class="btn__icon">🔍</span> Bắt đầu thu thập
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Facebook Form -->
+  <div class="card">
+    <div class="card__header">
+      <h2 class="card__title">📘 Thu thập từ Facebook</h2>
+    </div>
+    <div class="card__body">
+      <form method="POST" action="{{ url_for('collect_facebook') }}" id="form-fb">
+        <div class="form-group">
+          <label class="form-label" for="page_url">URL Facebook Page *</label>
+          <input type="url" id="page_url" name="page_url" class="form-input"
+                 placeholder="https://www.facebook.com/tenpage" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Nguồn thu thập</label>
+          <div class="checkbox-group">
+            <label class="checkbox-label">
+              <input type="checkbox" name="sources" value="about" checked>
+              Giới thiệu (About)
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" name="sources" value="posts" checked>
+              Bài viết (Posts)
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" name="sources" value="comments" checked>
+              Bình luận (Comments)
+            </label>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="max_posts">Số posts tối đa</label>
+          <input type="number" id="max_posts" name="max_posts" class="form-input"
+                 value="30" min="5" max="100">
+        </div>
+        <button type="submit" class="btn btn--blue btn--full" id="btn-fb">
+          <span class="btn__icon">🔍</span> Bắt đầu thu thập
+        </button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Recent Jobs -->
+{% if recent_jobs %}
+<div class="card mt-4">
+  <div class="card__header">
+    <h2 class="card__title">🕐 Công việc gần đây</h2>
+  </div>
+  <div class="card__body p-0">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>ID</th><th>Nguồn</th><th>Query</th>
+          <th>Trạng thái</th><th>Tìm được</th><th>Mới</th><th>Thời gian</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for job in recent_jobs %}
+        <tr>
+          <td><a href="{{ url_for('job_status_page', job_id=job.id) }}">#{{ job.id }}</a></td>
+          <td><span class="badge badge--{{ 'green' if job.source == 'google_maps' else 'blue' }}">{{ job.source }}</span></td>
+          <td class="text-truncate" style="max-width:200px">{{ job.query }}</td>
+          <td><span class="badge badge--{{ 'success' if job.status == 'done' else ('danger' if job.status == 'failed' else 'warning') }}">{{ job.status }}</span></td>
+          <td>{{ job.total_found or 0 }}</td>
+          <td>{{ job.new_leads or 0 }}</td>
+          <td class="text-muted text-sm">{{ job.started_at[:16] if job.started_at else '' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- Recent Leads -->
+{% if recent_leads %}
+<div class="card mt-4">
+  <div class="card__header">
+    <h2 class="card__title">📋 Leads mới nhất</h2>
+    <a href="{{ url_for('leads_page') }}" class="btn btn--sm btn--outline">Xem tất cả →</a>
+  </div>
+  <div class="card__body p-0">
+    <table class="table">
+      <thead>
+        <tr><th>SĐT</th><th>Tên</th><th>Nhà mạng</th><th>Nguồn</th><th>Ngày</th></tr>
+      </thead>
+      <tbody>
+        {% for lead in recent_leads %}
+        <tr>
+          <td><strong class="phone-number">{{ lead.phone_normalized }}</strong></td>
+          <td>{{ lead.name or '—' }}</td>
+          <td><span class="badge badge--carrier">{{ lead.carrier or '?' }}</span></td>
+          <td><span class="source-tag">{{ lead.source }}</span></td>
+          <td class="text-muted text-sm">{{ lead.collected_at[:10] if lead.collected_at else '' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Submit button loading state
+document.querySelectorAll('form').forEach(form => {
+  form.addEventListener('submit', function() {
+    const btn = this.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Đang xử lý...';
+  });
+});
+</script>
+{% endblock %}

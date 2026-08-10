@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Lead Phone Collector — Thu thập số điện thoại khách hàng tiềm năng từ Google Maps và Facebook">
+  <title>{% block title %}Lead Phone Collector{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <!-- Sidebar Nav -->
+  <aside class="sidebar">
+    <div class="sidebar__brand">
+      <span class="brand-icon">📱</span>
+      <span class="brand-name">Lead Collector</span>
+    </div>
+    <nav class="sidebar__nav">
+      <a href="{{ url_for('index') }}" class="nav-link {% if request.endpoint == 'index' %}active{% endif %}">
+        <span class="nav-icon">🏠</span> Dashboard
+      </a>
+      <a href="{{ url_for('leads_page') }}" class="nav-link {% if request.endpoint == 'leads_page' %}active{% endif %}">
+        <span class="nav-icon">📋</span> Danh sách Leads
+      </a>
+      <a href="{{ url_for('settings_page') }}" class="nav-link {% if request.endpoint == 'settings_page' %}active{% endif %}">
+        <span class="nav-icon">⚙️</span> Cấu hình
+      </a>
+    </nav>
+    <div class="sidebar__footer">
+      <span class="version-badge">v1.0.0</span>
+    </div>
+  </aside>
+
+  <!-- Main content -->
+  <main class="main-content">
+    <!-- Top bar -->
+    <header class="topbar">
+      <div class="topbar__title">{% block page_title %}Dashboard{% endblock %}</div>
+      <div class="topbar__actions">{% block topbar_actions %}{% endblock %}</div>
+    </header>
+
+    <!-- Flash messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="flash-container">
+          {% for category, message in messages %}
+            <div class="flash flash--{{ category }}">
+              <span>{{ message }}</span>
+              <button class="flash__close" onclick="this.parentElement.remove()">×</button>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    <!-- Page content -->
+    <div class="page-content">
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+
+  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

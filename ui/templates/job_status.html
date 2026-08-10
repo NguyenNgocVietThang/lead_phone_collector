@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Tiến độ Job — Lead Phone Collector{% endblock %}
+{% block page_title %}⏳ Tiến độ Thu thập{% endblock %}
+
+{% set dot_class = 'status-dot--running' if job.status == 'running' else ('status-dot--done' if job.status == 'done' else 'status-dot--failed') %}
+
+{% block content %}
+<div class="card" id="job-card" data-job-id="{{ job.id }}" data-job-status="{{ job.status }}" style="max-width: 700px; margin: 0 auto;">
+  <div class="card__header">
+    <h2 class="card__title">Job #{{ job.id }} — {{ job.source }}</h2>
+  </div>
+  <div class="card__body">
+    <div class="job-info">
+      <div class="job-detail"><span class="label">Query:</span> <strong>{{ job.query }}</strong></div>
+      <div class="job-detail"><span class="label">Bắt đầu:</span> {{ job.started_at or '—' }}</div>
+    </div>
+
+    <!-- Status indicator -->
+    <div class="job-status-display" id="job-status-display">
+      <div class="status-dot {{ dot_class }}" id="status-dot"></div>
+      <span id="status-text">{{ job.status }}</span>
+    </div>
+
+    <!-- Live message -->
+    <div class="live-message" id="live-message">Đang chờ cập nhật...</div>
+
+    <!-- Progress stats -->
+    <div class="job-stats" id="job-stats" {% if job.status == 'running' %}style="display: none;"{% endif %}>
+      <div class="stat-mini"><span class="label">Tổng tìm thấy:</span> <strong id="total-found">{{ job.total_found or 0 }}</strong></div>
+      <div class="stat-mini"><span class="label">Leads mới:</span> <strong id="new-leads" class="text-success">{{ job.new_leads or 0 }}</strong></div>
+      <div class="stat-mini"><span class="label">Trùng bỏ qua:</span> <strong id="duplicates" class="text-muted">{{ job.duplicates or 0 }}</strong></div>
+    </div>
+
+    {% if job.error_message %}
+    <div class="error-box">⚠️ {{ job.error_message }}</div>
+    {% endif %}
+
+    <div class="job-actions mt-4">
+      <a href="{{ url_for('index') }}" class="btn btn--outline">← Về Dashboard</a>
+      <a href="{{ url_for('leads_page') }}" class="btn btn--primary">Xem Leads</a>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const jobCard = document.getElementById('job-card');
+const jobId = jobCard ? parseInt(jobCard.dataset.jobId, 10) : 0;
+const initialStatus = jobCard ? jobCard.dataset.jobStatus : '';
+let polling = null;
+
+async function pollStatus() {
+  if (!jobId) return;
+  try {
+    const resp = await fetch(`/api/job-status/${jobId}`);
+    const job = await resp.json();
+
+    document.getElementById('live-message').textContent = job.live_message || '';
+    document.getElementById('status-text').textContent = job.status;
+
+    const dot = document.getElementById('status-dot') || document.querySelector('.status-dot');
+    if (dot) {
+      dot.className = 'status-dot';
+      if (job.status === 'running') dot.classList.add('status-dot--running');
+      else if (job.status === 'done') dot.classList.add('status-dot--done');
+      else dot.classList.add('status-dot--failed');
+    }
+
+    if (job.status !== 'running') {
+      if (polling) clearInterval(polling);
+      const statsEl = document.getElementById('job-stats');
+      if (statsEl) statsEl.style.display = 'flex';
+      document.getElementById('total-found').textContent = job.total_found || 0;
+      document.getElementById('new-leads').textContent = job.new_leads || 0;
+      document.getElementById('duplicates').textContent = job.duplicates || 0;
+    }
+  } catch(e) { console.error(e); }
+}
+
+if (initialStatus === 'running') {
+  pollStatus();
+  polling = setInterval(pollStatus, 3000);
+}
+</script>
+{% endblock %}

@@ -1,0 +1,40 @@
+# =============================================================================
+# Lead Phone Collector - Dependencies
+# =============================================================================
+
+# Web scraping
+selenium>=4.15.0
+undetected-chromedriver>=3.5.5
+webdriver-manager>=4.0.1
+
+# HTTP requests
+requests>=2.31.0
+httpx>=0.25.0
+
+# Facebook
+# facebook-sdk>=3.1.0  # Uncomment if using Graph API
+
+# Google Sheets
+gspread>=5.12.0
+google-auth>=2.23.0
+google-auth-oauthlib>=1.1.0
+
+# Database
+# SQLite is built-in to Python stdlib
+
+# Excel export
+openpyxl>=3.1.2
+
+# Web UI
+flask>=3.0.0
+flask-cors>=4.0.0
+
+# Utils
+python-dotenv>=1.0.0
+phonenumbers>=8.13.25
+colorlog>=6.7.0
+tqdm>=4.66.0          # Progress bar
+
+# Dev/Test
+pytest>=7.4.0
+pytest-mock>=3.12.0

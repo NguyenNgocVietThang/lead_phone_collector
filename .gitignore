@@ -1,0 +1,50 @@
+# =============================================================================
+# .gitignore — Lead Phone Collector
+# =============================================================================
+
+# Environment & secrets
+.env
+config/google-service-account.json
+
+# Database
+data/leads.db
+data/*.db
+
+# Export files
+data/exports/*.xlsx
+data/exports/*.csv
+
+# Logs
+logs/*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+.eggs/
+htmlcov/
+.coverage
+
+# Virtual env
+venv/
+env/
+.venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Selenium / ChromeDriver cache
+.wdm/
+chromedriver*

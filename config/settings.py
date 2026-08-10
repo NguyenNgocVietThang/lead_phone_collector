@@ -51,6 +51,11 @@ class Settings:
     FACEBOOK_APP_ID: str = os.getenv("FACEBOOK_APP_ID", "")
     FACEBOOK_APP_SECRET: str = os.getenv("FACEBOOK_APP_SECRET", "")
 
+    # OAuth đăng nhập ứng dụng (độc lập với storage_state của collectors)
+    APP_BASE_URL: str = os.getenv("APP_BASE_URL", "http://localhost:5000").rstrip("/")
+    GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", "")
+    GOOGLE_CLIENT_SECRET: str = os.getenv("GOOGLE_CLIENT_SECRET", "")
+
     @property
     def facebook_graph_enabled(self) -> bool:
         """True nếu có đủ thông tin để dùng Facebook Graph API."""

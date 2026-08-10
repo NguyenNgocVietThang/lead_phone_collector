@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Đăng nhập — Lead Phone Collector</title>
+  <title>Đăng ký — Lead Phone Collector</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
@@ -170,7 +170,7 @@
         <span class="icon">📱</span>
         <span>Lead Collector</span>
       </div>
-      <p class="login-subtitle">Đăng nhập để bắt đầu thu thập số điện thoại khách hàng</p>
+      <p class="login-subtitle">Đăng ký tài khoản mới để bắt đầu</p>
     </div>
 
     <div class="login-body-content">
@@ -186,40 +186,52 @@
       {% endwith %}
 
       <!-- Quick Auth Services -->
-      <a href="{{ url_for('oauth_login', provider='facebook', next=request.args.get('next')) }}" class="login-btn-social btn-fb">
-          <span>📘</span> Đăng nhập bằng Facebook
+      <a href="{{ url_for('oauth_login', provider='facebook') }}" class="login-btn-social btn-fb">
+          <span>📘</span> Đăng ký bằng Facebook
       </a>
 
-      <a href="{{ url_for('oauth_login', provider='google', next=request.args.get('next')) }}" class="login-btn-social btn-google">
-          <span>🌐</span> Đăng nhập bằng Google / Gmail
+      <a href="{{ url_for('oauth_login', provider='google') }}" class="login-btn-social btn-google">
+          <span>🌐</span> Đăng ký bằng Google / Gmail
       </a>
 
       <div class="login-divider">
-        <span>hoặc đăng nhập bằng tên / email</span>
+        <span>hoặc đăng ký bằng email</span>
       </div>
 
-      <!-- Direct Login Form -->
-      <form method="POST" action="{{ url_for('login', next=request.args.get('next')) }}" class="login-form">
+      <!-- Registration Form -->
+      <form method="POST" action="{{ url_for('register') }}" class="login-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
-          <label class="form-label" for="user_identity">Email *</label>
-          <input type="email" id="user_identity" name="user_identity" class="form-input"
-                 placeholder="VD: user@gmail.com" required autofocus>
+          <label class="form-label" for="full_name">Họ và tên *</label>
+          <input type="text" id="full_name" name="full_name" class="form-input"
+                 placeholder="VD: Nguyễn Văn A" required autofocus>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="email">Email *</label>
+          <input type="email" id="email" name="email" class="form-input"
+                 placeholder="VD: user@example.com" required>
         </div>
 
         <div class="form-group">
           <label class="form-label" for="password">Mật khẩu *</label>
           <input type="password" id="password" name="password" class="form-input"
-                 placeholder="Nhập mật khẩu" required>
+                 placeholder="Tối thiểu 6 ký tự" minlength="6" required>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="confirm_password">Xác nhận mật khẩu *</label>
+          <input type="password" id="confirm_password" name="confirm_password" class="form-input"
+                 placeholder="Nhập lại mật khẩu" minlength="6" required>
         </div>
 
         <button type="submit" class="btn-submit-login">
-          🚀 Vào công cụ ngay
+          🚀 Tạo tài khoản
         </button>
       </form>
 
       <div class="link-text">
-        Chưa có tài khoản? <a href="{{ url_for('register') }}">Đăng ký ngay</a>
+        Đã có tài khoản? <a href="{{ url_for('login') }}">Đăng nhập ngay</a>
       </div>
     </div>
   </div>

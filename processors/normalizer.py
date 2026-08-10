@@ -101,8 +101,9 @@ class PhoneNormalizer:
             return NormalizedPhone(raw=str(raw), normalized=None, is_valid=False,
                                    carrier=None, digits_only="")
 
-        # Bước 1: Lấy toàn bộ chữ số
-        digits = re.sub(r"\D", "", raw)
+        # Bước 1: Thay thế 'o' / 'O' ở đầu bằng '0' nếu là số điện thoại dạng chữ
+        raw_clean = re.sub(r"^[oO](?=[3-9]|[\s.\-/_])", "0", raw.strip(), flags=re.IGNORECASE)
+        digits = re.sub(r"\D", "", raw_clean)
 
         if not digits:
             return NormalizedPhone(raw=raw, normalized=None, is_valid=False,

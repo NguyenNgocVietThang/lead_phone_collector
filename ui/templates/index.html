@@ -234,6 +234,9 @@ function updateFbPlaceholder(type) {
           <td>
             {% set s_info = lead.source|source_info %}
             {% set target_url = lead.source_url %}
+            {% if target_url and target_url.startswith('/') %}
+              {% set target_url = 'https://www.facebook.com' ~ target_url %}
+            {% endif %}
             {% if not target_url %}
               {% if s_info.category == 'google_maps' %}
                 {% set target_url = 'https://www.google.com/maps/search/?api=1&query=' ~ (lead.name or lead.address or lead.phone_normalized)|urlencode %}

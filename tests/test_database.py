@@ -4,6 +4,7 @@ Chạy: pytest tests/test_database.py -v
 """
 
 import tempfile
+import sqlite3
 import pytest
 from pathlib import Path
 from typing import Dict, Any
@@ -205,3 +206,46 @@ class TestJobs:
         job = tmp_db.get_job(job_id)
         assert job["status"] == "failed"
         assert "timeout" in job["error_message"]
+
+
+class TestUsersAndOAuth:
+    def test_oauth_creates_and_reuses_user(self, tmp_db):
+        first = tmp_db.login_oauth_user("google", "google-123", "USER@example.com", "Nguyễn A")
+        second = tmp_db.login_oauth_user("google", "google-123", "user@example.com", "Tên mới")
+
+        assert first["id"] == second["id"]
+        assert first["password_hash"] is None
+        assert tmp_db.get_oauth_identity("google", "google-123")["user_id"] == first["id"]
+
+    def test_oauth_links_existing_verified_email(self, tmp_db):
+        user_id = tmp_db.create_user("Email User", "same@example.com", "hash", "email")
+        linked = tmp_db.login_oauth_user("facebook", "fb-456", "SAME@example.com", "Facebook User")
+
+        assert linked["id"] == user_id
+        assert tmp_db.get_oauth_identity("facebook", "fb-456")["user_id"] == user_id
+
+    def test_legacy_users_table_migrates_without_data_loss(self, tmp_path):
+        path = tmp_path / "legacy.db"
+        with sqlite3.connect(path) as conn:
+            conn.execute("""
+                CREATE TABLE users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    full_name TEXT NOT NULL,
+                    email TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    auth_provider TEXT DEFAULT 'email',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    last_login DATETIME
+                )
+            """)
+            conn.execute(
+                "INSERT INTO users (full_name, email, password_hash) VALUES (?, ?, ?)",
+                ("Legacy", "LEGACY@example.com", "old-hash"),
+            )
+
+        migrated = LeadDatabase(db_path=path)
+        user = migrated.get_user_by_email("legacy@example.com")
+        assert user["full_name"] == "Legacy"
+        with sqlite3.connect(path) as conn:
+            password_column = next(row for row in conn.execute("PRAGMA table_info(users)") if row[1] == "password_hash")
+        assert password_column[3] == 0

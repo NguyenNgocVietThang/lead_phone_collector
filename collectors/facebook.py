@@ -11,12 +11,13 @@ Tuân thủ:
   - Không thu thập profile cá nhân yêu cầu đăng nhập.
 """
 
+import hashlib
 import logging
 import random
 import time
 from dataclasses import dataclass, field
 from typing import List, Optional, Callable, Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import requests
 
 from processors.extractor import PhoneExtractor
@@ -42,6 +43,14 @@ SRC_PROFILE_BIO = "fb_profile_bio"
 SRC_PROFILE_POST = "fb_profile_post"
 SRC_PROFILE_COMMENT = "fb_profile_comment"
 SRC_PROFILE_LIKER = "fb_profile_liker"
+
+ALLOWED_SOURCES = {"about", "bio", "posts", "comments", "likers"}
+DEFAULT_SOURCES = ["about", "posts", "comments", "likers"]
+FEED_SELECTORS = (
+    '[data-pagelet^="FeedUnit"]',
+    'div[data-pagelet="GroupFeed"] > div',
+    'div[role="feed"] > div',
+)
 
 # Backward compatibility aliases
 SRC_SELENIUM_ABOUT = SRC_PLAYWRIGHT_ABOUT
@@ -142,7 +151,11 @@ class FacebookCollector:
             FbCollectionResult.
         """
         if sources is None:
-            sources = ["about", "posts", "comments", "likers"]
+            sources = DEFAULT_SOURCES.copy()
+        else:
+            # Giữ đúng thứ tự người dùng chọn, bỏ giá trị lạ và giá trị trùng.
+            sources = list(dict.fromkeys(s for s in sources if s in ALLOWED_SOURCES))
+        max_posts = max(1, min(int(max_posts), 200))
 
         target = target.strip()
 
@@ -172,11 +185,30 @@ class FacebookCollector:
             page_id = self._extract_page_id(target_url)
             graph_results = self._collect_graph_api(page_id, sources, max_posts)
             result.results.extend(graph_results)
+            # Token hết hạn/quyền thiếu thường chỉ trả JSON lỗi và danh sách rỗng.
+            # Tự chuyển sang trình duyệt để một cấu hình Graph lỗi không làm mất cả job.
+            if not graph_results:
+                logger.warning("Graph API không trả dữ liệu, chuyển sang Playwright.")
+                if self.progress_callback:
+                    self.progress_callback("Graph API không có dữ liệu, đang chuyển sang quét trình duyệt...")
+                result.results.extend(
+                    self._collect_playwright_target(target_url, target_type, sources, max_posts, result)
+                )
         else:
             logger.info("Dùng Playwright (target_type=%s, logged_in=%s).", target_type, settings.is_fb_logged_in)
             playwright_results = self._collect_playwright_target(target_url, target_type, sources, max_posts, result)
             result.results.extend(playwright_results)
 
+        # Loại bỏ các SĐT bị trùng lặp trong cùng phiên thu thập
+        seen_keys = set()
+        unique_results = []
+        for r in result.results:
+            key = (r.phone_normalized, r.source_url)
+            if key not in seen_keys:
+                seen_keys.add(key)
+                unique_results.append(r)
+
+        result.results = unique_results
         result.total_found = len(result.results)
         logger.info("Hoàn thành Facebook [%s]: %d SĐT tìm được.", target_type, result.total_found)
         return result
@@ -411,7 +443,7 @@ class FacebookCollector:
             logger.warning("Lỗi scrape trang chủ Bio/Header: %s", e)
 
         # 2. Thu thập từ trang /about
-        about_url = target_url.rstrip("/") + "/about"
+        about_url = self._build_about_url(target_url)
         try:
             self._page.goto(about_url, wait_until="domcontentloaded", timeout=30000)
             self._human_delay(3.0, 5.0)
@@ -437,6 +469,18 @@ class FacebookCollector:
 
         return results
 
+    @staticmethod
+    def _build_about_url(target_url: str) -> str:
+        """Tạo URL About đúng cho cả username URL và ``profile.php?id=...``."""
+        parsed = urlparse(target_url)
+        if parsed.path.rstrip("/").endswith("/profile.php"):
+            query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+            query["sk"] = "about"
+            return urlunparse(parsed._replace(query=urlencode(query), fragment=""))
+
+        about_path = parsed.path.rstrip("/") + "/about"
+        return urlunparse(parsed._replace(path=about_path, query="", fragment=""))
+
     def _scrape_feed_units(
         self,
         url: str,
@@ -448,13 +492,20 @@ class FacebookCollector:
         src_liker: str = SRC_PLAYWRIGHT_LIKER,
     ) -> List[FbPhoneResult]:
         """Scrape bài viết, bình luận & lượt thích từ Page, Profile, Group hoặc Kết quả Tìm kiếm."""
-        results = []
+        results: List[FbPhoneResult] = []
         if not self._page:
             return results
 
         try:
             self._page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            self._human_delay(3.0, 5.0)
+            try:
+                self._page.wait_for_selector(
+                    ', '.join(FEED_SELECTORS) + ', div[role="article"]',
+                    timeout=8000,
+                )
+            except Exception:
+                logger.debug("Facebook chưa render feed selector sau 8 giây; dùng fallback body.")
+            self._human_delay(1.0, 2.0)
             self._dismiss_popups()
 
             page_name = result.page_name or self._get_page_name()
@@ -462,72 +513,97 @@ class FacebookCollector:
                 result.page_name = page_name
 
             posts_processed = 0
-            last_height = 0
-            empty_scroll_count = 0
+            seen_posts = set()
+            idle_scrolls = 0
+            body_fallback_scanned = False
+            max_scrolls = max(8, min(max_posts * 2, 80))
 
-            while posts_processed < max_posts:
-                posts = self._page.query_selector_all('[data-pagelet^="FeedUnit"]')
-                if not posts:
-                    posts = self._page.query_selector_all("div[role='article']")
-                if not posts:
-                    posts = self._page.query_selector_all("div[role='feed'] > div")
+            for _ in range(max_scrolls):
+                posts = self._find_feed_units()
+                new_this_scroll = 0
 
-                for post in posts[posts_processed:]:
+                # Facebook ảo hóa DOM khi cuộn, vì vậy không thể cắt mảng bằng
+                # posts_processed. Dùng fingerprint để không bỏ sót node mới.
+                for post in posts:
                     if posts_processed >= max_posts:
                         break
 
                     try:
-                        # Mở rộng văn bản bị rút gọn "Xem thêm"
+                        initial_text = (post.inner_text() or "").strip()
+                        specific_post_url = self._get_post_url(post)
+                        fingerprint = self._post_fingerprint(specific_post_url, initial_text)
+                        if not fingerprint or fingerprint in seen_posts:
+                            continue
+                        seen_posts.add(fingerprint)
+
+                        # 1. Mở rộng tất cả văn bản bị rút gọn "Xem thêm" / "See more"
                         try:
-                            see_more = post.query_selector('div[role="button"]:has-text("Xem thêm"), div[role="button"]:has-text("See more")')
-                            if see_more and see_more.is_visible():
-                                see_more.click()
-                                self._human_delay(0.3, 0.7)
+                            see_mores = post.query_selector_all(
+                                'div[role="button"]:has-text("Xem thêm"), div[role="button"]:has-text("See more"), '
+                                'span:has-text("Xem thêm"), span:has-text("See more")'
+                            )
+                            for sm in see_mores[:3]:
+                                if sm.is_visible():
+                                    sm.click()
+                                    self._human_delay(0.2, 0.4)
                         except Exception:
                             pass
+
+                        post_url = specific_post_url or url
+
+                        # 2. Mở rộng các nhánh bình luận có thể nhìn thấy.
+                        if "comments" in sources:
+                            self._expand_comment_threads(post)
+
+                            # Một số nút mở bài viết trong dialog thay vì bung inline.
+                            dialog = self._page.query_selector('div[role="dialog"]')
+                            if dialog:
+                                try:
+                                    dialog_text = dialog.inner_text() or ""
+                                    self._append_phone_matches(
+                                        results, dialog_text, src_comment, post_url, page_name
+                                    )
+                                except Exception as e_dlg:
+                                    logger.debug("Lỗi đọc dialog bình luận: %s", e_dlg)
+                                finally:
+                                    try:
+                                        self._page.keyboard.press("Escape")
+                                    except Exception:
+                                        pass
 
                         post_text = post.inner_text() or ""
                         if not post_text.strip():
                             posts_processed += 1
+                            new_this_scroll += 1
                             continue
 
-                        post_url = self._get_post_url(post) or url
-
+                        # Chỉ extract toàn khối một lần. Khi chỉ chọn Comments, khối
+                        # được gắn nguồn comment; các comment cụ thể vẫn được quét dưới đây.
                         if "posts" in sources:
-                            extraction = self._extractor.extract(post_text)
-                            for match in extraction.matches:
-                                r = self._process_phone(
-                                    match.raw, src_post, post_url,
-                                    match.context, page_name,
-                                )
-                                if r:
-                                    results.append(r)
+                            self._append_phone_matches(
+                                results, post_text, src_post, post_url, page_name
+                            )
+                        elif "comments" in sources:
+                            self._append_phone_matches(
+                                results, post_text, src_comment, post_url, page_name
+                            )
 
                         if "comments" in sources:
-                            # Mở rộng bình luận "Xem thêm bình luận" nếu có
-                            try:
-                                more_comments = post.query_selector('div[role="button"]:has-text("Xem thêm bình luận"), div[role="button"]:has-text("Xem tất cả bình luận")')
-                                if more_comments and more_comments.is_visible():
-                                    more_comments.click()
-                                    self._human_delay(0.5, 1.0)
-                            except Exception:
-                                pass
-
+                            # Quét chi tiết từng thẻ comment cụ thể
                             comment_els = post.query_selector_all(
-                                'div[aria-label*="Bình luận"] span, ul li div[dir="auto"], div[role="article"] span'
+                                'div[role="article"], div[aria-label*="Bình luận"], div[aria-label*="Comment"], '
+                                'div[aria-label*="bình luận"], div[aria-label*="comment"], ul li'
                             )
-                            for comment_el in comment_els[:20]:
-                                comment_text = comment_el.inner_text() or ""
-                                if not comment_text.strip():
-                                    continue
-                                extraction = self._extractor.extract(comment_text)
-                                for match in extraction.matches:
-                                    r = self._process_phone(
-                                        match.raw, src_comment, post_url,
-                                        match.context, page_name,
+                            for comment_el in comment_els[:100]:
+                                try:
+                                    c_text = comment_el.inner_text() or ""
+                                    if not c_text.strip():
+                                        continue
+                                    self._append_phone_matches(
+                                        results, c_text, src_comment, post_url, page_name
                                     )
-                                    if r:
-                                        results.append(r)
+                                except Exception:
+                                    pass
 
                         if "likers" in sources:
                             try:
@@ -551,24 +627,45 @@ class FacebookCollector:
                                 logger.debug("Lỗi đọc danh sách lượt thích: %s", e_likers)
 
                         posts_processed += 1
+                        new_this_scroll += 1
+                        if self.progress_callback:
+                            self.progress_callback(
+                                f"Đã quét {posts_processed}/{max_posts} bài viết, tìm thấy {len(results)} kết quả..."
+                            )
 
                     except Exception as e:
                         logger.debug("Lỗi xử lý element bài viết: %s", e)
                         posts_processed += 1
+                        new_this_scroll += 1
                         continue
 
-                new_height = self._page.evaluate("document.body.scrollHeight")
-                if new_height == last_height:
-                    empty_scroll_count += 1
-                    if empty_scroll_count >= 3:
-                        logger.info("Đã scroll hết kết quả Facebook.")
-                        break
-                else:
-                    empty_scroll_count = 0
+                # Profile/page có giao diện mới đôi khi không còn role=feed/article.
+                # Quét body một lần làm fallback để vẫn bắt nội dung đang hiển thị.
+                if not posts and not body_fallback_scanned:
+                    body_fallback_scanned = True
+                    body_text = self._page.inner_text("body") or ""
+                    fallback_source = src_post if "posts" in sources else src_comment
+                    if "posts" in sources or "comments" in sources:
+                        self._append_phone_matches(
+                            results, body_text, fallback_source, url, page_name
+                        )
 
-                last_height = new_height
-                self._page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                self._human_delay(2.0, 4.0)
+                if posts_processed >= max_posts:
+                    break
+
+                idle_scrolls = idle_scrolls + 1 if new_this_scroll == 0 else 0
+                if idle_scrolls >= 4:
+                    logger.info("Không có bài viết mới sau 4 lần cuộn, dừng quét Facebook.")
+                    break
+
+                # Đưa node cuối vào viewport rồi cuộn thêm để kích hoạt lazy-load.
+                try:
+                    if posts:
+                        posts[-1].scroll_into_view_if_needed(timeout=3000)
+                    self._page.mouse.wheel(0, 1200)
+                except Exception:
+                    self._page.evaluate("window.scrollBy(0, 1200)")
+                self._human_delay(0.8, 1.5)
                 self._dismiss_popups()
 
         except Exception as e:
@@ -576,6 +673,90 @@ class FacebookCollector:
             result.errors.append(f"Lỗi Feed Units: {e}")
 
         return results
+
+    def _find_feed_units(self) -> List[Any]:
+        """Tìm các bài viết top-level trên nhiều biến thể DOM Facebook."""
+        if not self._page:
+            return []
+
+        for selector in FEED_SELECTORS:
+            posts = self._page.query_selector_all(selector)
+            if posts:
+                return posts
+
+        articles = self._page.query_selector_all('div[role="article"]')
+        top_level = []
+        for article in articles:
+            try:
+                is_nested = article.evaluate(
+                    'el => !!el.parentElement.closest(\'div[role="article"]\')'
+                )
+                if not is_nested:
+                    top_level.append(article)
+            except Exception:
+                top_level.append(article)
+        if top_level:
+            return top_level
+        return self._page.query_selector_all("div.userContentWrapper, div[aria-describedby]")
+
+    @staticmethod
+    def _post_fingerprint(post_url: Optional[str], text: str) -> str:
+        """Khóa ổn định để nhận biết bài đã xử lý trong DOM bị ảo hóa."""
+        if post_url:
+            return f"url:{_normalize_fb_url(post_url)}"
+        compact = " ".join((text or "").split())
+        if not compact:
+            return ""
+        sample = compact[:1000] + compact[-300:]
+        return "text:" + hashlib.sha1(sample.encode("utf-8")).hexdigest()
+
+    def _append_phone_matches(
+        self,
+        destination: List[FbPhoneResult],
+        text: str,
+        source: str,
+        source_url: str,
+        page_name: str,
+    ) -> None:
+        """Extract và thêm các SĐT hợp lệ từ một khối text."""
+        for match in self._extractor.extract(text or "").matches:
+            phone = self._process_phone(
+                match.raw, source, source_url, match.context, page_name
+            )
+            if phone:
+                destination.append(phone)
+
+    def _expand_comment_threads(self, post: Any, max_clicks: int = 5) -> None:
+        """Mở comment/reply theo selector hẹp để tránh duyệt hàng trăm span mỗi bài."""
+        expand_terms = (
+            "xem thêm bình luận", "xem tất cả bình luận", "xem các bình luận",
+            "xem bình luận trước", "view more comments", "view all comments",
+            "view previous comments", "phản hồi", "replies",
+        )
+        excluded_terms = (
+            "viết bình luận", "write a comment", "thích", "like",
+            "chia sẻ", "share", "gửi", "send",
+        )
+
+        for _ in range(max_clicks):
+            clicked = False
+            buttons = post.query_selector_all('div[role="button"], span[role="button"]')
+            for button in buttons[:80]:
+                try:
+                    label = " ".join((button.inner_text() or "").lower().split())
+                    if not label or len(label) > 80:
+                        continue
+                    if any(term in label for term in excluded_terms):
+                        continue
+                    if any(term in label for term in expand_terms) and button.is_visible():
+                        button.click()
+                        self._human_delay(0.35, 0.7)
+                        clicked = True
+                        break
+                except Exception:
+                    continue
+            if not clicked:
+                break
 
     # Alias cũ
     _scrape_posts = _scrape_feed_units
@@ -637,6 +818,15 @@ class FacebookCollector:
 
         context = self._browser.new_context(**context_kwargs)
 
+        # Ảnh/video/font không tham gia trích xuất văn bản nhưng chiếm phần lớn
+        # băng thông và thời gian render trên feed Facebook.
+        context.route(
+            "**/*",
+            lambda route: route.abort()
+            if route.request.resource_type in {"image", "media", "font"}
+            else route.continue_(),
+        )
+
         context.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
@@ -644,7 +834,9 @@ class FacebookCollector:
             window.chrome = { runtime: {} };
         """)
 
-        self._page = context.new_page()
+        page = context.new_page()
+        page.set_default_timeout(10000)
+        self._page = page
         logger.info("Đã khởi động Playwright Chromium cho Facebook thành công.")
 
     def _get_page_name(self) -> str:
@@ -666,16 +858,47 @@ class FacebookCollector:
             return ""
 
     def _get_post_url(self, post_element) -> Optional[str]:
-        """Lấy URL của post từ element."""
-        if not self._page:
+        """Lấy URL của post từ element (hỗ trợ pfbid, permalink, story_fbid, posts, timestamp links)."""
+        if not self._page or not post_element:
             return None
+        selectors = [
+            'a[href*="pfbid"]',
+            'a[href*="/posts/"]',
+            'a[href*="/permalink"]',
+            'a[href*="story_fbid"]',
+            'a[href*="/share/p/"]',
+            'a[href*="/photos/"]',
+            'a[href*="/photo.php"]',
+            'a[href*="/videos/"]',
+            'a[href*="/watch/"]',
+            'a[href*="/reel/"]',
+            'h2 a[href]', 'h3 a[href]', 'h4 a[href]',
+            'span > a[role="link"][href]',
+            'a[aria-label*="giờ"][href]', 'a[aria-label*="phút"][href]',
+            'a[aria-label*="tháng"][href]', 'a[aria-label*="ngày"][href]',
+            'a[aria-label*="hrs"][href]', 'a[aria-label*="min"][href]',
+        ]
         try:
-            link = post_element.query_selector('a[href*="/posts/"], a[href*="story_fbid"]')
-            if link:
-                return link.get_attribute("href")
+            for sel in selectors:
+                links = post_element.query_selector_all(sel)
+                for link in links:
+                    href = link.get_attribute("href")
+                    if href:
+                        full_url = _normalize_fb_url(href)
+                        if self._looks_like_post_url(full_url):
+                            return full_url
         except Exception:
             pass
         return None
+
+    @staticmethod
+    def _looks_like_post_url(url: str) -> bool:
+        """Loại link tác giả/menu khỏi URL nguồn của bài viết."""
+        lowered = (url or "").lower()
+        return any(marker in lowered for marker in (
+            "/posts/", "/permalink/", "story_fbid=", "pfbid", "/share/p/",
+            "/photos/", "/photo.php", "/videos/", "/watch/", "/reel/",
+        ))
 
     def _process_phone(
         self,
@@ -695,10 +918,11 @@ class FacebookCollector:
             carrier=norm.carrier or "",
             is_valid=norm.is_valid,
             source=source,
-            source_url=source_url,
+            source_url=_normalize_fb_url(source_url),
             content=context[:300],
             page_name=page_name,
         )
+
 
     def _human_delay(self, lo: Optional[float] = None, hi: Optional[float] = None):
         """Nghỉ ngẫu nhiên."""
@@ -709,9 +933,7 @@ class FacebookCollector:
     @staticmethod
     def _normalize_url(url: str) -> str:
         """Đảm bảo URL có scheme https://."""
-        if not url.startswith("http"):
-            url = "https://www.facebook.com/" + url.lstrip("/")
-        return url
+        return _normalize_fb_url(url)
 
     @staticmethod
     def _extract_page_id(url: str) -> str:
@@ -719,3 +941,30 @@ class FacebookCollector:
         parsed = urlparse(url)
         path = parsed.path.strip("/")
         return path.split("/")[0] if path else url
+
+
+def _normalize_fb_url(href: str) -> str:
+    """Chuẩn hóa URL Facebook về dạng đầy đủ https://www.facebook.com/..."""
+    if not href:
+        return ""
+    href = href.strip()
+    if href.startswith("//"):
+        href = "https:" + href
+    elif href.startswith("/"):
+        href = "https://www.facebook.com" + href
+    elif not href.startswith("http"):
+        href = "https://www.facebook.com/" + href.lstrip("/")
+
+    # Loại bỏ tham số tracking thừa nếu có, bảo toàn tham số nhận diện quan trọng
+    try:
+        from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+        parsed = urlparse(href)
+        if "facebook.com" in parsed.netloc:
+            query = parse_qs(parsed.query)
+            for tracking_key in ["__cft__", "__tn__", "ch", "ref", "notif_id", "notif_t"]:
+                query.pop(tracking_key, None)
+            new_query = urlencode(query, doseq=True)
+            href = urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment))
+    except Exception:
+        pass
+    return href

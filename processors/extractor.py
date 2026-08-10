@@ -16,45 +16,37 @@ logger = logging.getLogger(__name__)
 # Regex patterns nhận diện SĐT Việt Nam
 # ---------------------------------------------------------------------------
 
-# Ký tự phân cách hợp lệ giữa các nhóm số (cách, chấm, gạch)
-_SEP = r"[\s.\-]?"
+# Ký tự phân cách hợp lệ giữa các nhóm số (cách, chấm, gạch ngang, gạch chéo, gạch dưới)
+_SEP = r"[\s.\-/_]*"
+_SEP1 = r"[\s.\-/_]?"
 
-# Pattern đầu số VN hợp lệ (10 số sau khi chuẩn hóa)
-#   - 03x, 05x, 07x, 08x, 09x (sau cải cách số 2018)
-_VN_PREFIX_10 = r"0[3-9]\d"
-
-# Pattern mã quốc gia +84 hoặc 84
-_VN_COUNTRY = r"(?:\+84|84)"
-
-# Phần thân số sau prefix (7 chữ số, có thể có separator)
-_BODY_7 = rf"\d{{3}}{_SEP}\d{{4}}"
-_BODY_7_LOOSE = rf"\d{{2,4}}{_SEP}\d{{3,5}}"
+# Pattern đầu số VN hợp lệ (03x, 05x, 07x, 08x, 09x) và dạng viết thay 0 bằng o/O, cho phép phân cách giữa các chữ số đầu
+_VN_PREFIX_10 = r"[0oO]" + _SEP1 + r"[3-9]" + _SEP1 + r"\d"
+_VN_PREFIX_OLD_11 = r"[0oO]" + _SEP1 + r"1" + _SEP1 + r"[2689]" + _SEP1 + r"\d"
 
 # ---------------------------------------------------------------------------
-# Tập hợp pattern — từ chặt đến lỏng
+# Tập hợp pattern — hỗ trợ mọi kiểu gõ (chấm, cách, 2-2-2, từng số, o/O...)
+# Đã bổ sung boundary (?<!\d) và (?!\d) để không cắt vụn chữ số từ ID / chuỗi số dài
 # ---------------------------------------------------------------------------
 _PATTERNS: List[str] = [
-    # --- Mã quốc gia +84 ---
-    rf"\+84{_SEP}[3-9]\d{_SEP}{_BODY_7}",          # +84 98 123 4567
-    rf"84[3-9]\d{_SEP}{_BODY_7}",                   # 84981234567
+    # --- Mã quốc gia +84 hoặc 84 ---
+    rf"(?<!\d)\+84{_SEP1}[3-9]{_SEP1}\d{_SEP}(?:\d{_SEP}){{7}}(?!\d)",   # +84 98 123 4567 / +84.98.123.4567
+    rf"(?<!\d)84{_SEP1}[3-9]{_SEP1}\d{_SEP}(?:\d{_SEP}){{7}}(?!\d)",      # 84981234567 / 84.98.123.4567
 
-    # --- Định dạng 10 chữ số chuẩn ---
-    rf"{_VN_PREFIX_10}{_SEP}{_BODY_7}",             # 098 123 4567 / 098.123.4567
+    # --- Có ngoặc (098) / (o98) ---
+    rf"(?<!\d)\({_VN_PREFIX_10}\){_SEP}(?:\d{_SEP}){{7}}(?!\d)",         # (098) 123-4567 / (o98) 123 4567
 
-    # --- Có ngoặc ---
-    rf"\({_VN_PREFIX_10}\){_SEP}{_BODY_7}",         # (098) 123-4567
+    # --- Số 11 chữ số cũ (012x, 016x, 018x, 019x) ---
+    rf"(?<!\d){_VN_PREFIX_OLD_11}{_SEP}(?:\d{_SEP}){{7}}(?!\d)",
 
-    # --- Tách nhóm 4-3-3 (0981 234 567) ---
-    rf"{_VN_PREFIX_10}\d{_SEP}\d{{3}}{_SEP}\d{{3}}",  # 0981 234 567
-
-    # --- Tách nhóm 4-3-4 (0981 234 5678 - ít phổ biến hơn) ---
-    rf"{_VN_PREFIX_10}\d{_SEP}\d{{3}}{_SEP}\d{{4}}",  # 0981 234 5678
+    # --- Định dạng 10 chữ số chuẩn & biến thể (098 123 4567, 0984.93.73.23, o984937323, 0.9.8.4...) ---
+    rf"(?<!\d){_VN_PREFIX_10}{_SEP}(?:\d{_SEP}){{7}}(?!\d)",
 ]
 
 # Compile tất cả patterns, kết hợp bằng OR
 _COMPILED_PATTERN = re.compile(
     "|".join(f"(?:{p})" for p in _PATTERNS),
-    re.UNICODE,
+    re.UNICODE | re.IGNORECASE,
 )
 
 # Window trích xuất context (số ký tự về mỗi phía)
@@ -125,20 +117,27 @@ class PhoneExtractor:
         for m in self._pattern.finditer(cleaned):
             raw = m.group(0).strip()
             start = m.start()
+            end = m.end()
 
             # Tránh nhận diện cùng vị trí 2 lần (do OR pattern)
             if start in seen_positions:
                 continue
+
+            # Đảm bảo không nằm sát chữ số ở 2 đầu (loại bỏ trường hợp cắt lẻ từ ID)
+            if start > 0 and cleaned[start - 1].isdigit():
+                continue
+            if end < len(cleaned) and cleaned[end].isdigit():
+                continue
+
             seen_positions.add(start)
 
-            # Lọc sơ bộ: phải có ít nhất 9 chữ số liên tiếp sau khi loại sep
+            # Lọc sơ bộ: phải có từ 9 đến 12 chữ số liên tiếp sau khi loại sep
             digits_only = re.sub(r"\D", "", raw)
             if len(digits_only) < 9 or len(digits_only) > 12:
                 continue
 
-            context = self._extract_context(cleaned, start, m.end())
+            context = self._extract_context(cleaned, start, end)
             preview = cleaned[:100]
-
             matches.append(PhoneMatch(
                 raw=raw,
                 context=context,

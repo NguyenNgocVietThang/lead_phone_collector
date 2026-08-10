@@ -69,10 +69,37 @@ CREATE TABLE IF NOT EXISTS collection_jobs (
     error_message   TEXT
 );
 
+CREATE TABLE IF NOT EXISTS users (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    full_name       TEXT NOT NULL,
+    email           TEXT UNIQUE NOT NULL,
+    password_hash   TEXT,
+    auth_provider   TEXT DEFAULT 'email',
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_login      DATETIME
+);
+
 CREATE INDEX IF NOT EXISTS idx_leads_source ON leads(source);
 CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status);
 CREATE INDEX IF NOT EXISTS idx_leads_collected_at ON leads(collected_at);
 CREATE INDEX IF NOT EXISTS idx_leads_carrier ON leads(carrier);
+"""
+
+_OAUTH_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS oauth_identities (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id             INTEGER NOT NULL,
+    provider            TEXT NOT NULL,
+    provider_subject    TEXT NOT NULL,
+    provider_email      TEXT NOT NULL,
+    created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_login          DATETIME,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE(provider, provider_subject)
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_oauth_identities_user ON oauth_identities(user_id);
 """
 
 
@@ -184,6 +211,8 @@ class LeadDatabase:
         """Tạo tables nếu chưa tồn tại và tự động chuyển đổi source cũ sang fb_playwright_."""
         with self._connect() as conn:
             conn.executescript(_SCHEMA_SQL)
+            self._migrate_users_password_nullable(conn)
+            conn.executescript(_OAUTH_SCHEMA_SQL)
             try:
                 conn.execute("UPDATE leads SET source = REPLACE(source, 'fb_selenium_', 'fb_playwright_') WHERE source LIKE 'fb_selenium_%';")
                 conn.execute("UPDATE collection_jobs SET source = REPLACE(source, 'fb_selenium_', 'fb_playwright_') WHERE source LIKE 'fb_selenium_%';")
@@ -213,6 +242,44 @@ class LeadDatabase:
                 logger.debug("Lỗi tạo index collector_user: %s", e)
 
         logger.debug("Database khởi tạo thành công tại: %s", self.db_path)
+
+    @staticmethod
+    def _migrate_users_password_nullable(conn: sqlite3.Connection) -> None:
+        """Cho phép tài khoản OAuth không có mật khẩu, đồng thời giữ nguyên user cũ."""
+        columns = conn.execute("PRAGMA table_info(users);").fetchall()
+        password_column = next((row for row in columns if row[1] == "password_hash"), None)
+        if not password_column or password_column[3] == 0:
+            return
+
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys=OFF;")
+        try:
+            conn.executescript("""
+                BEGIN;
+                CREATE TABLE users_migrated (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    full_name       TEXT NOT NULL,
+                    email           TEXT UNIQUE NOT NULL,
+                    password_hash   TEXT,
+                    auth_provider   TEXT DEFAULT 'email',
+                    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    last_login      DATETIME
+                );
+                INSERT INTO users_migrated
+                    (id, full_name, email, password_hash, auth_provider, created_at, last_login)
+                SELECT id, full_name, lower(email), password_hash, auth_provider, created_at, last_login
+                FROM users;
+                DROP TABLE users;
+                ALTER TABLE users_migrated RENAME TO users;
+                COMMIT;
+            """)
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+        finally:
+            conn.execute("PRAGMA foreign_keys=ON;")
+        logger.info("Đã migrate users.password_hash sang nullable.")
 
     # ── Lead CRUD ────────────────────────────────────────────────────────────
 
@@ -575,3 +642,128 @@ class LeadDatabase:
                 "SELECT * FROM collection_jobs WHERE id = ?", (job_id,)
             ).fetchone()
         return dict(row) if row else None
+
+    # ── User CRUD ────────────────────────────────────────────────────────────
+
+    def create_user(self, full_name: str, email: str, password_hash: Optional[str], auth_provider: str = "email") -> Optional[int]:
+        """
+        Tạo người dùng mới.
+
+        Returns:
+            ID của user được tạo, hoặc None nếu email đã tồn tại.
+        """
+        sql = """
+            INSERT OR IGNORE INTO users
+                (full_name, email, password_hash, auth_provider)
+            VALUES
+                (?, ?, ?, ?)
+        """
+        with self._connect() as conn:
+            cursor = conn.execute(sql, (full_name, email.strip().lower(), password_hash, auth_provider))
+            if cursor.rowcount > 0:
+                logger.info("Tạo user mới: %s (%s)", email, full_name)
+                return cursor.lastrowid
+            else:
+                logger.debug("Email đã tồn tại: %s", email)
+                return None
+
+    def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        """Lấy thông tin người dùng theo email."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM users WHERE email = ?", (email.strip().lower(),)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:
+        """Lấy thông tin người dùng theo ID nội bộ."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
+
+    def update_user_password_hash(self, user_id: int, password_hash: str) -> bool:
+        """Nâng cấp hoặc thay đổi password hash của người dùng."""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE users SET password_hash = ? WHERE id = ?",
+                (password_hash, user_id),
+            )
+            return cursor.rowcount > 0
+
+    def login_oauth_user(
+        self,
+        provider: str,
+        provider_subject: str,
+        email: str,
+        full_name: str,
+    ) -> Dict[str, Any]:
+        """Đăng nhập, tạo mới hoặc liên kết một danh tính OAuth theo email."""
+        provider = provider.strip().lower()
+        provider_subject = provider_subject.strip()
+        email = email.strip().lower()
+        full_name = full_name.strip() or email.split("@", 1)[0]
+        now = datetime.now().isoformat()
+
+        with self._connect() as conn:
+            identity = conn.execute(
+                """
+                SELECT users.* FROM oauth_identities
+                JOIN users ON users.id = oauth_identities.user_id
+                WHERE oauth_identities.provider = ? AND oauth_identities.provider_subject = ?
+                """,
+                (provider, provider_subject),
+            ).fetchone()
+
+            if identity:
+                user_id = identity["id"]
+                conn.execute(
+                    """
+                    UPDATE oauth_identities SET provider_email = ?, last_login = ?
+                    WHERE provider = ? AND provider_subject = ?
+                    """,
+                    (email, now, provider, provider_subject),
+                )
+            else:
+                user = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+                if user:
+                    user_id = user["id"]
+                else:
+                    cursor = conn.execute(
+                        """
+                        INSERT INTO users (full_name, email, password_hash, auth_provider, last_login)
+                        VALUES (?, ?, NULL, ?, ?)
+                        """,
+                        (full_name, email, provider, now),
+                    )
+                    user_id = cursor.lastrowid
+
+                conn.execute(
+                    """
+                    INSERT INTO oauth_identities
+                        (user_id, provider, provider_subject, provider_email, last_login)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (user_id, provider, provider_subject, email, now),
+                )
+
+            conn.execute("UPDATE users SET last_login = ? WHERE id = ?", (now, user_id))
+            row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+            return dict(row)
+
+    def get_oauth_identity(self, provider: str, provider_subject: str) -> Optional[Dict[str, Any]]:
+        """Lấy danh tính OAuth để phục vụ kiểm thử và quản trị."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM oauth_identities WHERE provider = ? AND provider_subject = ?",
+                (provider.strip().lower(), provider_subject.strip()),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def update_user_last_login(self, email: str) -> bool:
+        """Cập nhật thời gian đăng nhập cuối cùng."""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE users SET last_login = ? WHERE email = ?",
+                (datetime.now().isoformat(), email),
+            )
+            return cursor.rowcount > 0

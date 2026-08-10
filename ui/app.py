@@ -13,15 +13,23 @@ Routes:
   GET  /settings            Trang cấu hình
 """
 
+import hashlib
+import hmac
 import logging
 import re
+import secrets
 import threading
 from datetime import datetime
+from urllib.parse import urlsplit, urlunsplit
+
+from authlib.integrations.base_client.errors import OAuthError
+from authlib.integrations.flask_client import OAuth
 
 from flask import (
     Flask, render_template, request, jsonify, redirect,
-    url_for, send_file, flash, session,
+    url_for, send_file, flash, session, abort,
 )
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from config.settings import settings
 from storage.database import LeadDatabase, Lead
@@ -37,22 +45,115 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = settings.FLASK_SECRET_KEY
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=settings.APP_BASE_URL.lower().startswith("https://"),
+)
 app.jinja_env.filters["source_info"] = get_source_info
+
+oauth = OAuth(app)
+oauth.register(
+    name="google",
+    client_id=settings.GOOGLE_CLIENT_ID,
+    client_secret=settings.GOOGLE_CLIENT_SECRET,
+    server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+    client_kwargs={"scope": "openid email profile"},
+)
+oauth.register(
+    name="facebook",
+    client_id=settings.FACEBOOK_APP_ID,
+    client_secret=settings.FACEBOOK_APP_SECRET,
+    access_token_url="https://graph.facebook.com/oauth/access_token",
+    authorize_url="https://www.facebook.com/dialog/oauth",
+    api_base_url="https://graph.facebook.com/",
+    client_kwargs={"scope": "public_profile,email"},
+)
 
 db = LeadDatabase()
 
 # Lưu trạng thái các jobs đang chạy
 _active_jobs: dict = {}  # job_id -> {"status": str, "message": str}
 
-EXEMPT_ENDPOINTS = {"login", "login_social", "logout", "static"}
+EXEMPT_ENDPOINTS = {"login", "register", "oauth_login", "oauth_callback", "logout", "static"}
+
+
+@app.template_global("csrf_token")
+def _csrf_token() -> str:
+    token = session.get("csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session["csrf_token"] = token
+    return token
+
+
+def _valid_csrf() -> bool:
+    expected = session.get("csrf_token", "")
+    supplied = request.form.get("csrf_token", "")
+    return bool(expected and supplied and hmac.compare_digest(expected, supplied))
+
+
+def _safe_next_url(value: str | None) -> str:
+    """Chỉ cho phép URL nội bộ, kể cả khi đầu vào là URL tuyệt đối cùng origin."""
+    if not value:
+        return url_for("index")
+
+    candidate = urlsplit(value)
+    base = urlsplit(settings.APP_BASE_URL)
+    if candidate.scheme or candidate.netloc:
+        if candidate.scheme.lower() != base.scheme.lower() or candidate.netloc.lower() != base.netloc.lower():
+            return url_for("index")
+        candidate = candidate._replace(scheme="", netloc="")
+
+    if not candidate.path.startswith("/") or candidate.path.startswith("//"):
+        return url_for("index")
+    return urlunsplit(("", "", candidate.path, candidate.query, ""))
+
+
+def _set_user_session(user: dict, provider: str) -> None:
+    """Tạo session mới sau khi danh tính đã được xác thực."""
+    session.clear()
+    session["user_id"] = user["id"]
+    session["user_identity"] = user["full_name"]
+    session["user_email"] = user["email"]
+    session["auth_provider"] = provider
+    _csrf_token()
+
+
+def _is_valid_email(email: str) -> bool:
+    return bool(re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email))
+
+
+def _verify_password(user: dict, password: str) -> bool:
+    stored = user.get("password_hash") or ""
+    is_legacy_sha256 = len(stored) == 64 and all(char in "0123456789abcdef" for char in stored.lower())
+    if is_legacy_sha256:
+        matches = hmac.compare_digest(stored.lower(), hashlib.sha256(password.encode()).hexdigest())
+        if matches:
+            db.update_user_password_hash(user["id"], generate_password_hash(password))
+        return matches
+    try:
+        return bool(stored) and check_password_hash(stored, password)
+    except (ValueError, TypeError):
+        return False
 
 
 @app.before_request
 def check_authentication():
     """Kiểm tra bắt buộc đăng nhập trước khi truy cập bất kỳ trang nào."""
     if request.endpoint and request.endpoint not in EXEMPT_ENDPOINTS:
-        if not session.get("user_identity"):
-            return redirect(url_for("login", next=request.url))
+        if not session.get("user_id"):
+            next_url = request.full_path.rstrip("?")
+            return redirect(url_for("login", next=next_url))
+
+
+@app.after_request
+def disable_sensitive_page_caching(response):
+    """Không để trình duyệt hiển thị lại trang bảo vệ từ cache sau đăng xuất."""
+    if response.mimetype == "text/html":
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -63,51 +164,150 @@ def check_authentication():
 def login():
     """Trang đăng nhập."""
     if request.method == "POST":
-        identity = request.form.get("user_identity", "").strip()
-        if not identity:
-            flash("Vui lòng nhập tên hoặc email đăng nhập.", "error")
+        if not _valid_csrf():
+            abort(400, description="Phiên biểu mẫu không hợp lệ. Vui lòng tải lại trang.")
+
+        email = request.form.get("user_identity", "").strip().lower()
+        password = request.form.get("password", "")
+        if not email or not password:
+            flash("Vui lòng nhập email và mật khẩu.", "error")
             return render_template("login.html")
-        session["user_identity"] = identity
-        session["auth_provider"] = "direct"
-        flash(f"Đăng nhập thành công với tên: {identity}", "success")
-        next_url = request.args.get("next") or url_for("index")
+
+        user = db.get_user_by_email(email)
+        if not user or not _verify_password(user, password):
+            flash("Email hoặc mật khẩu không đúng.", "error")
+            return render_template("login.html")
+
+        next_url = _safe_next_url(request.args.get("next"))
+        db.update_user_last_login(user["email"])
+        _set_user_session(user, "email")
+        flash(f"Đăng nhập thành công! Chào mừng {user['full_name']}", "success")
         return redirect(next_url)
 
-    if session.get("user_identity"):
+    if session.get("user_id"):
         return redirect(url_for("index"))
     return render_template("login.html")
 
 
-@app.route("/login/social/<provider>", methods=["GET", "POST"])
-def login_social(provider: str):
-    """Đăng nhập bằng tài khoản Facebook hoặc Google đã lưu phiên hoặc mở trình duyệt tương tác."""
-    from storage.auth import AuthManager
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    """Trang đăng ký."""
+    if request.method == "POST":
+        if not _valid_csrf():
+            abort(400, description="Phiên biểu mẫu không hợp lệ. Vui lòng tải lại trang.")
+
+        full_name = request.form.get("full_name", "").strip()
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        confirm_password = request.form.get("confirm_password", "")
+
+        if not full_name or not email or not password:
+            flash("Vui lòng điền đầy đủ thông tin bắt buộc.", "error")
+            return render_template("register.html")
+        if not _is_valid_email(email):
+            flash("Địa chỉ email không hợp lệ.", "error")
+            return render_template("register.html")
+        if password != confirm_password:
+            flash("Mật khẩu xác nhận không khớp.", "error")
+            return render_template("register.html")
+        if len(password) < 6:
+            flash("Mật khẩu phải có ít nhất 6 ký tự.", "error")
+            return render_template("register.html")
+
+        password_hash = generate_password_hash(password)
+        user_id = db.create_user(full_name, email, password_hash, auth_provider="email")
+        if user_id:
+            user = db.get_user_by_id(user_id)
+            if user is None:
+                abort(500, description="Không thể tải tài khoản vừa tạo.")
+            _set_user_session(user, "email")
+            flash(f"Đăng ký thành công! Chào mừng {full_name}", "success")
+            return redirect(url_for("index"))
+
+        flash("Email đã được sử dụng. Vui lòng đăng nhập hoặc dùng email khác.", "error")
+        return render_template("register.html")
+
+    if session.get("user_id"):
+        return redirect(url_for("index"))
+    return render_template("register.html")
+
+
+@app.route("/auth/<provider>", methods=["GET"])
+def oauth_login(provider: str):
+    """Bắt đầu OAuth Authorization Code flow."""
     provider = provider.lower().strip()
+    if provider not in {"google", "facebook"}:
+        abort(404)
 
-    # Nếu chưa có phiên đăng nhập đã lưu, tự động mở trình duyệt tương tác để người dùng đăng nhập
-    if not AuthManager.is_logged_in(provider):
-        flash(f"Chưa có phiên làm việc {provider.upper()}. Đang mở trình duyệt để bạn đăng nhập...", "info")
-        AuthManager.launch_interactive_login(provider, timeout_seconds=120)
+    credentials = {
+        "google": (settings.GOOGLE_CLIENT_ID, settings.GOOGLE_CLIENT_SECRET),
+        "facebook": (settings.FACEBOOK_APP_ID, settings.FACEBOOK_APP_SECRET),
+    }
+    if not all(credentials[provider]):
+        flash(f"Đăng nhập {provider.title()} chưa được cấu hình.", "error")
+        return redirect(url_for("login"))
 
-    user_info = AuthManager.get_user_info(provider)
-    if user_info.get("logged_in"):
-        name = user_info.get("name", f"Tài khoản {provider.title()}")
-        session["user_identity"] = name
-        session["auth_provider"] = provider
-        flash(f"Đã kết nối thành công tài khoản {provider.upper()}: {name}", "success")
-    else:
-        name = f"Tài khoản {provider.title()}"
-        session["user_identity"] = name
-        session["auth_provider"] = provider
-        flash(f"Đã tạo phiên làm việc mặc định cho {provider.upper()}.", "warning")
+    session["oauth_next"] = _safe_next_url(request.args.get("next"))
+    redirect_uri = f"{settings.APP_BASE_URL}/auth/{provider}/callback"
+    client = oauth.create_client(provider)
+    if client is None:
+        abort(500, description="OAuth provider chưa được khởi tạo.")
+    return client.authorize_redirect(redirect_uri)
 
-    next_url = request.args.get("next") or url_for("index")
-    return redirect(next_url)
+
+@app.route("/auth/<provider>/callback", methods=["GET"])
+def oauth_callback(provider: str):
+    """Xử lý callback OAuth, tạo/liên kết user và đăng nhập ứng dụng."""
+    provider = provider.lower().strip()
+    if provider not in {"google", "facebook"}:
+        abort(404)
+
+    next_url = _safe_next_url(session.pop("oauth_next", None))
+    client = oauth.create_client(provider)
+    if client is None:
+        flash(f"Đăng nhập {provider.title()} chưa được cấu hình.", "error")
+        return redirect(url_for("login"))
+    try:
+        token = client.authorize_access_token()
+        if provider == "google":
+            profile = token.get("userinfo") or client.userinfo(token=token)
+            verified = profile.get("email_verified")
+            if verified not in {True, "true", "True", 1}:
+                flash("Google chưa xác minh địa chỉ email của tài khoản này.", "error")
+                return redirect(url_for("login"))
+        else:
+            response = client.get("me?fields=id,name,email", token=token)
+            response.raise_for_status()
+            profile = response.json()
+
+        subject = str(profile.get("sub") or profile.get("id") or "").strip()
+        email = str(profile.get("email") or "").strip().lower()
+        full_name = str(profile.get("name") or "").strip()
+        if not subject or not _is_valid_email(email):
+            flash(
+                f"{provider.title()} không cung cấp email. Hãy cho phép quyền email hoặc dùng đăng nhập email.",
+                "error",
+            )
+            return redirect(url_for("login"))
+
+        user = db.login_oauth_user(provider, subject, email, full_name)
+        _set_user_session(user, provider)
+        flash(f"Đăng nhập {provider.title()} thành công!", "success")
+        return redirect(next_url)
+    except OAuthError as exc:
+        logger.warning("OAuth %s bị từ chối hoặc callback không hợp lệ: %s", provider, exc.error)
+    except Exception as exc:
+        logger.error("Không thể hoàn tất OAuth %s (%s).", provider, type(exc).__name__)
+
+    flash(f"Không thể đăng nhập bằng {provider.title()}. Vui lòng thử lại.", "error")
+    return redirect(url_for("login"))
 
 
 @app.route("/logout", methods=["POST"])
 def logout():
     """Đăng xuất tài khoản."""
+    if not _valid_csrf():
+        abort(400, description="Phiên biểu mẫu không hợp lệ. Vui lòng tải lại trang.")
     session.clear()
     flash("Đã đăng xuất khỏi hệ thống.", "info")
     return redirect(url_for("login"))
@@ -436,7 +636,13 @@ def auth_status():
 # Background job runners
 # ---------------------------------------------------------------------------
 
-def _run_maps_job(job_id: int, keyword: str, area: str, limit: int):
+def _run_maps_job(
+    job_id: int,
+    keyword: str,
+    area: str,
+    limit: int,
+    collector_user: str = "",
+):
     """Chạy Google Maps collector trong background thread."""
     from collectors.google_maps import GoogleMapsCollector
     from storage.sheets import GoogleSheetsSync
@@ -450,6 +656,9 @@ def _run_maps_job(job_id: int, keyword: str, area: str, limit: int):
         with GoogleMapsCollector(progress_callback=on_progress) as collector:
             _active_jobs[job_id]["message"] = "Đang tìm kiếm trên Google Maps..."
             result = collector.search(keyword, area, limit)
+
+        if not result.businesses and result.errors:
+            raise RuntimeError(result.errors[0])
 
         _active_jobs[job_id]["message"] = "Đang lưu vào database..."
 
@@ -467,6 +676,7 @@ def _run_maps_job(job_id: int, keyword: str, area: str, limit: int):
                 address=biz.address,
                 website=biz.website,
                 carrier=biz.carrier,
+                collector_user=collector_user or "",
             ))
 
         batch_result = db.insert_leads_batch(leads)

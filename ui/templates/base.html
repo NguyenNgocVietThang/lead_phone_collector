@@ -44,7 +44,8 @@
           <span class="user-avatar" style="font-size:14px;">👤</span>
           <strong class="user-name" style="color:#334155;" title="Người đăng nhập">{{ session.user_identity }}</strong>
           <form method="POST" action="{{ url_for('logout') }}" style="display:inline; margin:0; padding:0;">
-            <button type="submit" class="btn-logout" style="background:none; border:none; color:#EF4444; font-size:12px; cursor:pointer; padding:2px 6px; font-weight:600; border-radius:4px;" title="Đăng xuất">🚪 Dừng</button>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn-logout" style="background:none; border:none; color:#EF4444; font-size:12px; cursor:pointer; padding:2px 6px; font-weight:600; border-radius:4px;" title="Đăng xuất">🚪 Đăng xuất</button>
           </form>
         </div>
         {% endif %}

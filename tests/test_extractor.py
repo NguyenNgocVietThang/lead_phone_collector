@@ -72,6 +72,22 @@ class TestMultiplePhones:
 class TestInvalidNumbers:
     """Kiểm tra các số không phải SĐT VN."""
 
+    def test_long_facebook_id_not_extracted_as_phone(self, extractor):
+        # FB ID hoặc timestamp 13-15 chữ số không được bị trích xuất cắt vụn thành SĐT
+        text = "Bài viết ID 1000343204188 hoặc 034320418899"
+        result = extractor.extract(text)
+        assert result.total_found == 0
+
+    def test_phone_next_to_words(self, extractor):
+        text = "SĐT0343204188 hoặc 0343204188LH"
+        result = extractor.extract(text)
+        assert result.total_found == 2
+
+    def test_fb_url_normalization(self):
+        from collectors.facebook import _normalize_fb_url
+        assert _normalize_fb_url("/groups/123/posts/456") == "https://www.facebook.com/groups/123/posts/456"
+        assert _normalize_fb_url("pfbid02xxx") == "https://www.facebook.com/pfbid02xxx"
+
     def test_random_digits_short(self, extractor):
         result = extractor.extract("Mã đơn: 12345")
         assert result.total_found == 0
@@ -153,3 +169,18 @@ class TestRealWorldSamples:
         result = extractor.extract(text)
         # Hai số di động đều hợp lệ
         assert result.total_found >= 2
+
+    def test_facebook_comment_variants(self, extractor):
+        text = """
+        Thái Hằng: Có zl 0984937323
+        Giadung: Sẵn sll giá tốt zalo 0343204188 kho phú lương.
+        Nguyen Tmanh: Sẵn giao 0985377965
+        Đặng Tùng Dương: ZI 0345277801
+        Quốc Việt: ZI 0787066240 Sẵn kho hà đông
+        Thư: liên hệ zl em ạ 0356259153
+        San San Dương: liên hệ zl em nha 0966521738
+        Người dùng O: o984.93.73.23 hoặc 0.9.8.4.9.3.7.3.2.3
+        """
+        result = extractor.extract(text)
+        assert result.total_found >= 9
+

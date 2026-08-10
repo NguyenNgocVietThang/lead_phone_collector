@@ -80,17 +80,19 @@ def test_auth_manager_get_user_info(tmp_path):
         settings.FB_AUTH_PATH = original_fb
 
 
-def test_flask_social_login_route(mocker):
-    """Test route /login/social/<provider> không bị lỗi 500."""
-    mocker.patch("storage.auth.AuthManager.launch_interactive_login", return_value=True)
+def test_flask_social_login_requires_configuration(monkeypatch):
+    """OAuth chưa cấu hình phải báo lỗi thân thiện, không tạo phiên giả."""
+    import ui.app as web
     from ui.app import app
+    monkeypatch.setattr(web.settings, "GOOGLE_CLIENT_ID", "")
+    monkeypatch.setattr(web.settings, "GOOGLE_CLIENT_SECRET", "")
     app.config["TESTING"] = True
     with app.test_client() as client:
-        res = client.get("/login/social/google", follow_redirects=True)
+        res = client.get("/auth/google", follow_redirects=True)
         assert res.status_code == 200
-
-        res_fb = client.post("/login/social/facebook", follow_redirects=True)
-        assert res_fb.status_code == 200
+        assert "chưa được cấu hình" in res.get_data(as_text=True)
+        with client.session_transaction() as state:
+            assert "user_id" not in state
 
 
 def test_facebook_collector_target_type_auto(mocker):
@@ -116,4 +118,3 @@ def test_facebook_collector_target_type_auto(mocker):
 
     res_profile = collector.collect(target_profile_php, target_type="profile", sources=["about", "posts", "comments", "likers"])
     assert res_profile.page_url == target_profile_php
-

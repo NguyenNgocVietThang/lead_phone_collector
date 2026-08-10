@@ -17,6 +17,12 @@ from pathlib import Path
 
 from config.settings import settings
 
+# Force UTF-8 encoding for Windows terminals
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')  # type: ignore
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8')  # type: ignore
+
 # Setup logging ngay khi khởi động
 settings.setup_logging()
 logger = logging.getLogger(__name__)
@@ -28,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 def cmd_ui(args):
     """Khởi động Flask Web UI."""
-    print(f"\n🌐 Khởi động Web UI tại http://localhost:{settings.FLASK_PORT}")
+    print(f"\n[WEB] Khoi dong Web UI tai http://localhost:{settings.FLASK_PORT}")
     print("   Nhấn Ctrl+C để dừng.\n")
     from ui.app import run_ui
     run_ui()
@@ -36,14 +42,17 @@ def cmd_ui(args):
 
 def cmd_maps(args):
     """Thu thập từ Google Maps."""
+    import re
     from collectors.google_maps import GoogleMapsCollector
     from storage.database import LeadDatabase, Lead
     from storage.sheets import GoogleSheetsSync
 
+    keyword = re.sub(r"\s+", " ", args.keyword or "").strip()
+    area = re.sub(r"\s+", " ", args.area or "").strip()
     db = LeadDatabase()
-    job_id = db.create_job("google_maps", f"{args.keyword} {args.area}".strip())
+    job_id = db.create_job("google_maps", f"{keyword} {area}".strip())
 
-    print(f"\n🗺️  Thu thập Google Maps: '{args.keyword}' @ '{args.area}' (limit={args.limit})")
+    print(f"\n🗺️  Thu thập Google Maps: '{keyword}' @ '{area}' (limit={args.limit})")
     print("   Vui lòng đợi...\n")
 
     def on_progress(current, total):
@@ -67,7 +76,7 @@ def cmd_maps(args):
                 name=biz.name,
                 phone_raw=biz.phone_raw,
                 phone_normalized=biz.phone_normalized,
-                source="google_maps",
+                source=getattr(biz, "source", "google_maps_details") or "google_maps_details",
                 source_url=biz.maps_url,
                 content=f"Google Maps: {biz.name}",
                 address=biz.address,
@@ -109,16 +118,19 @@ def cmd_maps(args):
 
 
 def cmd_facebook(args):
-    """Thu thập từ Facebook."""
+    """Thu thập từ Facebook (Page, Group, hoặc Tìm kiếm từ khóa)."""
     from collectors.facebook import FacebookCollector
     from storage.database import LeadDatabase, Lead
     from storage.sheets import GoogleSheetsSync
 
+    target_type = getattr(args, "mode", "auto") or "auto"
+    target = getattr(args, "target", None) or getattr(args, "url", "")
+
     db = LeadDatabase()
-    job_id = db.create_job("facebook", args.url)
+    job_id = db.create_job("facebook", f"[{target_type}] {target}")
     sources = args.sources.split(",") if args.sources else ["about", "posts", "comments"]
 
-    print(f"\n📘 Thu thập Facebook: {args.url}")
+    print(f"\n📘 Thu thập Facebook [{target_type}]: {target}")
     print(f"   Nguồn: {', '.join(sources)} | Max posts: {args.max_posts}\n")
 
     def on_progress(msg: str):
@@ -126,7 +138,7 @@ def cmd_facebook(args):
 
     try:
         with FacebookCollector(headless=not args.show_browser, progress_callback=on_progress) as collector:
-            result = collector.collect(args.url, sources, args.max_posts)
+            result = collector.collect(target=target, target_type=target_type, sources=sources, max_posts=args.max_posts)
 
         print(f"\n✅ Hoàn thành! Tìm được {result.total_found} SĐT.")
 
@@ -161,6 +173,19 @@ def cmd_facebook(args):
         db.fail_job(job_id, str(e))
         print(f"\n❌ Lỗi: {e}")
         sys.exit(1)
+
+
+def cmd_login(args):
+    """Đăng nhập tương tác để lưu session cookies."""
+    from storage.auth import AuthManager
+    service = getattr(args, "service", "facebook") or "facebook"
+    print(f"\n🔑 Khởi động trình duyệt đăng nhập tương tác cho {service.upper()}...")
+    print("Vui lòng thực hiện đăng nhập trên cửa sổ trình duyệt vừa mở...\n")
+    success = AuthManager.launch_interactive_login(service=service)
+    if success:
+        print(f"\n✅ Đã lưu thành công phiên đăng nhập {service.upper()}!")
+    else:
+        print(f"\n❌ Không lưu được phiên đăng nhập {service.upper()}.")
 
 
 def cmd_export(args):
@@ -265,13 +290,21 @@ Ví dụ:
     p_maps.add_argument("--export", choices=["excel", "csv"], help="Tự động xuất sau khi thu thập")
 
     # facebook
-    p_fb = sub.add_parser("facebook", help="Thu thập từ Facebook page công khai")
-    p_fb.add_argument("--url", required=True, help="URL Facebook page")
+    p_fb = sub.add_parser("facebook", help="Thu thập từ Facebook Page, Group hoặc Từ khóa tìm kiếm")
+    p_fb.add_argument("-m", "--mode", choices=["page", "group", "search", "auto"], default="auto",
+                      help="Loại mục tiêu (page, group, search, auto)")
+    p_fb.add_argument("--url", "-t", "--target", dest="target", required=True,
+                      help="URL Facebook Page/Group hoặc Từ khóa tìm kiếm")
     p_fb.add_argument("--sources", default="about,posts,comments",
                       help="Nguồn (mặc định: about,posts,comments)")
     p_fb.add_argument("--max-posts", type=int, default=30, help="Số posts tối đa")
     p_fb.add_argument("--show-browser", action="store_true", help="Hiện browser")
     p_fb.add_argument("--export", choices=["excel", "csv"], help="Tự động xuất")
+
+    # login
+    p_login = sub.add_parser("login", help="Đăng nhập tương tác để lưu phiên làm việc (Facebook / Google)")
+    p_login.add_argument("-s", "--service", choices=["facebook", "google"], default="facebook",
+                         help="Dịch vụ đăng nhập (facebook hoặc google)")
 
     # export
     p_exp = sub.add_parser("export", help="Xuất dữ liệu ra file")
@@ -298,6 +331,7 @@ if __name__ == "__main__":
         "ui": cmd_ui,
         "maps": cmd_maps,
         "facebook": cmd_facebook,
+        "login": cmd_login,
         "export": cmd_export,
         "stats": cmd_stats,
     }

@@ -6,16 +6,31 @@ Hỗ trợ insert, dedup, query, và cập nhật trạng thái lead.
 """
 
 import logging
+import re
 import sqlite3
+import unicodedata
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Iterator
+from typing import List, Optional, Dict, Any, Iterator, Tuple
 
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+
+def remove_accents(input_str: Optional[str]) -> str:
+    """Loại bỏ dấu tiếng Việt, chuyển về chữ thường và chuẩn hóa khoảng trắng dư thừa."""
+    if not input_str:
+        return ""
+    s = str(input_str).replace("đ", "d").replace("Đ", "d")
+    s = unicodedata.normalize("NFD", s)
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    s = s.lower()
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
 
 # ---------------------------------------------------------------------------
 # SQL Schema
@@ -35,6 +50,7 @@ CREATE TABLE IF NOT EXISTS leads (
     carrier             TEXT,
     status              TEXT DEFAULT 'new',
     notes               TEXT,
+    collector_user      TEXT,
     collected_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -47,6 +63,7 @@ CREATE TABLE IF NOT EXISTS collection_jobs (
     total_found     INTEGER DEFAULT 0,
     new_leads       INTEGER DEFAULT 0,
     duplicates      INTEGER DEFAULT 0,
+    collector_user  TEXT,
     started_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     finished_at     DATETIME,
     error_message   TEXT
@@ -78,6 +95,7 @@ class Lead:
     carrier: str = ""
     status: str = "new"
     notes: str = ""
+    collector_user: str = ""
     collected_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -95,6 +113,7 @@ class Lead:
             "carrier": self.carrier,
             "status": self.status,
             "notes": self.notes,
+            "collector_user": self.collector_user,
             "collected_at": self.collected_at,
             "updated_at": self.updated_at,
         }
@@ -114,6 +133,7 @@ class CollectionJob:
     total_found: int = 0
     new_leads: int = 0
     duplicates: int = 0
+    collector_user: str = ""
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
     error_message: Optional[str] = None
@@ -143,9 +163,10 @@ class LeadDatabase:
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        """Tạo connection với row_factory để truy cập cột theo tên."""
+        """Tạo connection với row_factory và hàm UNACCENT tùy chỉnh."""
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
+        conn.create_function("UNACCENT", 1, remove_accents)
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA foreign_keys=ON;")
         try:
@@ -160,9 +181,37 @@ class LeadDatabase:
     # ── Init ─────────────────────────────────────────────────────────────────
 
     def _init_db(self):
-        """Tạo tables nếu chưa tồn tại."""
+        """Tạo tables nếu chưa tồn tại và tự động chuyển đổi source cũ sang fb_playwright_."""
         with self._connect() as conn:
             conn.executescript(_SCHEMA_SQL)
+            try:
+                conn.execute("UPDATE leads SET source = REPLACE(source, 'fb_selenium_', 'fb_playwright_') WHERE source LIKE 'fb_selenium_%';")
+                conn.execute("UPDATE collection_jobs SET source = REPLACE(source, 'fb_selenium_', 'fb_playwright_') WHERE source LIKE 'fb_selenium_%';")
+            except Exception as e:
+                logger.debug("Lỗi khi migrate source trong DB: %s", e)
+
+            # Auto-migrate collector_user columns
+            try:
+                cols = [row[1] for row in conn.execute("PRAGMA table_info(leads);").fetchall()]
+                if "collector_user" not in cols:
+                    conn.execute("ALTER TABLE leads ADD COLUMN collector_user TEXT;")
+                    logger.info("Đã bổ sung cột collector_user vào bảng leads.")
+            except Exception as e:
+                logger.debug("Lỗi khi migrate collector_user cho leads: %s", e)
+
+            try:
+                cols_jobs = [row[1] for row in conn.execute("PRAGMA table_info(collection_jobs);").fetchall()]
+                if "collector_user" not in cols_jobs:
+                    conn.execute("ALTER TABLE collection_jobs ADD COLUMN collector_user TEXT;")
+                    logger.info("Đã bổ sung cột collector_user vào bảng collection_jobs.")
+            except Exception as e:
+                logger.debug("Lỗi khi migrate collector_user cho collection_jobs: %s", e)
+
+            try:
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_leads_collector_user ON leads(collector_user);")
+            except Exception as e:
+                logger.debug("Lỗi tạo index collector_user: %s", e)
+
         logger.debug("Database khởi tạo thành công tại: %s", self.db_path)
 
     # ── Lead CRUD ────────────────────────────────────────────────────────────
@@ -177,10 +226,10 @@ class LeadDatabase:
         sql = """
             INSERT OR IGNORE INTO leads
                 (name, phone_raw, phone_normalized, source, source_url,
-                 content, address, website, carrier, status, notes)
+                 content, address, website, carrier, status, notes, collector_user)
             VALUES
                 (:name, :phone_raw, :phone_normalized, :source, :source_url,
-                 :content, :address, :website, :carrier, :status, :notes)
+                 :content, :address, :website, :carrier, :status, :notes, :collector_user)
         """
         with self._connect() as conn:
             cursor = conn.execute(sql, {
@@ -195,6 +244,7 @@ class LeadDatabase:
                 "carrier": lead.carrier or "",
                 "status": lead.status or "new",
                 "notes": lead.notes or "",
+                "collector_user": lead.collector_user or "",
             })
             if cursor.rowcount > 0:
                 logger.debug("Chèn lead mới: %s (%s)", lead.phone_normalized, lead.name)
@@ -221,38 +271,137 @@ class LeadDatabase:
         logger.info("Batch insert: %d mới, %d trùng.", inserted, duplicates)
         return {"inserted": inserted, "duplicates": duplicates}
 
+    def _build_search_conditions(
+        self,
+        search: str,
+        search_mode: str = "fuzzy"
+    ) -> Tuple[List[str], Dict[str, Any], str]:
+        r"""
+        Xây dựng điều kiện SQL WHERE, parameters và ORDER BY score cho tìm kiếm.
+
+        - Khớp 1 phần / bất kỳ từ nào (ví dụ: tìm "Cửa hàng gia dụng" vẫn tìm thấy "Gia dụng").
+        - Không phân biệt chữ hoa/thường (case-insensitive).
+        - Loại bỏ dấu tiếng Việt (accent-insensitive).
+        - Chuẩn hóa khoảng trắng dư thừa (\s+ -> space).
+        - Sắp xếp kết quả khớp nhiều từ nhất/khớp tốt nhất lên đầu.
+        """
+        conditions = []
+        params: Dict[str, Any] = {}
+        order_by_score = ""
+
+        search_normalized = remove_accents(search)
+        if not search_normalized:
+            return conditions, params, order_by_score
+
+        fields = ["name", "phone_raw", "phone_normalized", "address", "content", "notes", "website"]
+
+        if search_mode == "exact":
+            unaccented_search = f"%{search_normalized}%"
+            exact_conds = []
+            for f_idx, field in enumerate(fields):
+                p_key = f"exact_search_{f_idx}"
+                exact_conds.append(f"UNACCENT({field}) LIKE :{p_key}")
+                params[p_key] = unaccented_search
+            conditions.append(f"({' OR '.join(exact_conds)})")
+
+        else:
+            tokens = [t for t in search_normalized.split() if t]
+
+            phrase_param = f"%{search_normalized}%"
+            params["search_full_phrase"] = phrase_param
+
+            all_match_clauses = []
+            for f_idx, field in enumerate(fields):
+                all_match_clauses.append(f"UNACCENT({field}) LIKE :search_full_phrase")
+
+            score_parts = []
+            for t_idx, token in enumerate(tokens):
+                token_val = f"%{token}%"
+                t_field_conds = []
+                for f_idx, field in enumerate(fields):
+                    p_key = f"tok_{t_idx}_{f_idx}"
+                    t_field_conds.append(f"UNACCENT({field}) LIKE :{p_key}")
+                    params[p_key] = token_val
+                
+                t_clause = f"({' OR '.join(t_field_conds)})"
+                all_match_clauses.append(t_clause)
+                score_parts.append(f"(CASE WHEN {t_clause} THEN 1 ELSE 0 END)")
+
+            conditions.append(f"({' OR '.join(all_match_clauses)})")
+
+            if score_parts:
+                score_expr = " + ".join(score_parts)
+                order_by_score = f"({score_expr}) DESC,"
+
+        return conditions, params, order_by_score
+
+    def _build_source_condition(self, source: str) -> Tuple[str, Dict[str, Any]]:
+        """Xây dựng SQL clause và parameters cho việc lọc theo nguồn (tổng quát hoặc chi tiết)."""
+        s = (source or "").strip()
+        if not s:
+            return "", {}
+
+        if s == "facebook":
+            return "source LIKE 'fb_%'", {}
+        elif s in ["fb_post", "fb_posts"]:
+            return "(source LIKE '%post%' AND source LIKE 'fb_%')", {}
+        elif s in ["fb_comment", "fb_comments"]:
+            return "(source LIKE '%comment%' AND source LIKE 'fb_%')", {}
+        elif s in ["fb_profile", "fb_about", "fb_bio"]:
+            return "(source LIKE '%about%' OR source LIKE '%bio%' OR source LIKE '%profile%')", {}
+        elif s in ["fb_liker", "fb_likers"]:
+            return "source LIKE '%liker%'", {}
+        elif s == "google_maps":
+            return "source LIKE 'google_maps%'", {}
+        elif s == "google_maps_details":
+            return "(source = 'google_maps' OR source = 'google_maps_details')", {}
+        elif s in ["google_maps_comment", "google_maps_review"]:
+            return "(source = 'google_maps_comment' OR source = 'google_maps_review')", {}
+        else:
+            return "source = :src_param", {"src_param": s}
+
     def get_leads(
         self,
         source: Optional[str] = None,
         status: Optional[str] = None,
         carrier: Optional[str] = None,
+        collector_user: Optional[str] = None,
         limit: int = 1000,
         offset: int = 0,
         search: Optional[str] = None,
+        search_mode: str = "fuzzy",
     ) -> List[Lead]:
-        """Truy vấn leads với filter."""
+        """Truy vấn leads với filter và tìm kiếm (gần đúng, trùng 1 phần, chính xác)."""
         conditions = []
         params: Dict[str, Any] = {}
+        order_clause = "ORDER BY collected_at DESC"
 
         if source:
-            conditions.append("source = :source")
-            params["source"] = source
+            s_cond, s_params = self._build_source_condition(source)
+            if s_cond:
+                conditions.append(s_cond)
+                params.update(s_params)
         if status:
             conditions.append("status = :status")
             params["status"] = status
         if carrier:
             conditions.append("carrier = :carrier")
             params["carrier"] = carrier
-        if search:
-            conditions.append(
-                "(name LIKE :search OR phone_normalized LIKE :search OR address LIKE :search)"
-            )
-            params["search"] = f"%{search}%"
+        if collector_user:
+            conditions.append("collector_user = :collector_user")
+            params["collector_user"] = collector_user
+
+        if search and search.strip():
+            s_conds, s_params, order_score = self._build_search_conditions(search, search_mode)
+            conditions.extend(s_conds)
+            params.update(s_params)
+            if order_score:
+                order_clause = f"ORDER BY {order_score} collected_at DESC"
 
         where = "WHERE " + " AND ".join(conditions) if conditions else ""
         sql = f"""
             SELECT * FROM leads {where}
-            ORDER BY collected_at DESC
+            {order_clause}
             LIMIT :limit OFFSET :offset
         """
         params["limit"] = limit
@@ -261,6 +410,53 @@ class LeadDatabase:
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [Lead.from_row(r) for r in rows]
+
+    def count_leads(
+        self,
+        source: Optional[str] = None,
+        status: Optional[str] = None,
+        carrier: Optional[str] = None,
+        collector_user: Optional[str] = None,
+        search: Optional[str] = None,
+        search_mode: str = "fuzzy",
+    ) -> int:
+        """Đếm số lượng leads thỏa mãn các điều kiện lọc và tìm kiếm."""
+        conditions = []
+        params: Dict[str, Any] = {}
+
+        if source:
+            s_cond, s_params = self._build_source_condition(source)
+            if s_cond:
+                conditions.append(s_cond)
+                params.update(s_params)
+        if status:
+            conditions.append("status = :status")
+            params["status"] = status
+        if carrier:
+            conditions.append("carrier = :carrier")
+            params["carrier"] = carrier
+        if collector_user:
+            conditions.append("collector_user = :collector_user")
+            params["collector_user"] = collector_user
+
+        if search and search.strip():
+            s_conds, s_params, _ = self._build_search_conditions(search, search_mode)
+            conditions.extend(s_conds)
+            params.update(s_params)
+
+        where = "WHERE " + " AND ".join(conditions) if conditions else ""
+        sql = f"SELECT COUNT(*) FROM leads {where}"
+
+        with self._connect() as conn:
+            return conn.execute(sql, params).fetchone()[0]
+
+    def get_distinct_collectors(self) -> List[str]:
+        """Lấy danh sách tất cả những người tìm kiếm duy nhất từ DB."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT collector_user FROM leads WHERE collector_user IS NOT NULL AND collector_user != '' ORDER BY collector_user ASC"
+            ).fetchall()
+        return [r[0] for r in rows if r[0]]
 
     def get_lead_by_id(self, lead_id: int) -> Optional[Lead]:
         """Lấy lead theo ID."""
@@ -307,18 +503,30 @@ class LeadDatabase:
         self,
         source: Optional[str] = None,
         status: Optional[str] = None,
+        carrier: Optional[str] = None,
+        collector_user: Optional[str] = None,
+        search: Optional[str] = None,
+        search_mode: str = "fuzzy",
     ) -> List[Lead]:
         """Lấy tất cả leads để export (không phân trang)."""
-        return self.get_leads(source=source, status=status, limit=100_000)
+        return self.get_leads(
+            source=source,
+            status=status,
+            carrier=carrier,
+            collector_user=collector_user,
+            search=search,
+            search_mode=search_mode,
+            limit=100_000,
+        )
 
     # ── Jobs CRUD ────────────────────────────────────────────────────────────
 
-    def create_job(self, source: str, query: str) -> int:
+    def create_job(self, source: str, query: str, collector_user: str = "") -> int:
         """Tạo job mới, trả về ID."""
         with self._connect() as conn:
             cursor = conn.execute(
-                "INSERT INTO collection_jobs (source, query) VALUES (?, ?)",
-                (source, query),
+                "INSERT INTO collection_jobs (source, query, collector_user) VALUES (?, ?, ?)",
+                (source, query, collector_user or ""),
             )
             return cursor.lastrowid or 0
 

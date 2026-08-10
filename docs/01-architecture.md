@@ -2,75 +2,82 @@
 
 ## Tổng quan
 
-**Lead Phone Collector** là tool tự động thu thập số điện thoại khách hàng tiềm năng từ các nguồn dữ liệu công khai, chuẩn hóa, loại trùng và lưu vào database + Google Sheets.
+**Lead Phone Collector** là hệ thống tự động thu thập số điện thoại khách hàng tiềm năng từ các nguồn dữ liệu công khai (**Google Maps**, **Facebook Fanpage**, **Facebook Groups**, **Facebook Keyword Search**), nhận diện, chuẩn hóa, loại trùng và lưu vào SQLite Database + Google Sheets + file xuất (Excel/CSV).
 
 ## Luồng dữ liệu
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                   NGUỒN DỮ LIỆU                     │
-└───────────────────┬─────────────────────────────────┘
-                    │
-         ┌──────────┴──────────┐
-         ▼                     ▼
-   ┌─────────────┐      ┌─────────────┐
-   │ Google Maps │      │  Facebook   │
-   │  (Selenium) │      │ Graph API / │
-   │             │      │  Selenium   │
-   └──────┬──────┘      └──────┬──────┘
-          │                    │
-          └──────────┬──────────┘
-                     ▼
-          ┌──────────────────┐
-          │  Phone Extractor │  ← Regex VN phone patterns
-          └────────┬─────────┘
-                   ▼
-          ┌──────────────────┐
-          │ Phone Normalizer │  ← Chuẩn hóa + validate
-          └────────┬─────────┘
-                   ▼
-          ┌──────────────────┐
-          │   Deduplicator   │  ← Loại trùng theo normalized
-          └────────┬─────────┘
-                   │
-       ┌───────────┼───────────┐
-       ▼           ▼           ▼
- ┌──────────┐ ┌────────┐ ┌──────────┐
- │  SQLite  │ │ Google │ │  Export  │
- │    DB    │ │ Sheets │ │Excel/CSV │
- └──────────┘ └────────┘ └──────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│ NGUỒN DỮ LIỆU │
+└───────────────────────────────────┬────────────────────────────────────┘
+ │
+ ┌──────────────────────────┼──────────────────────────┐
+ ▼ ▼ ▼
+ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+ │ Google Maps │ │ FB Public │ │ FB Groups / │
+ │ (Playwright)│ │ Pages │ │ Search │
+ └──────┬──────┘ └──────┬──────┘ └──────┬──────┘
+ │ │ │
+ │ └────────────┬─────────────┘
+ │ │
+ │ ┌──────────┴──────────┐
+ │ │ Auth / Cookie Session│ (storage/auth.py)
+ │ └──────────┬──────────┘
+ │ │
+ └───────────────────┬───────────────────┘
+ ▼
+ ┌──────────────────┐
+ │ Phone Extractor │ ← Regex VN phone patterns (10+ định dạng)
+ └────────┬─────────┘
+ ▼
+ ┌──────────────────┐
+ │ Phone Normalizer │ ← Chuẩn hóa (10 chữ số) + carrier detect
+ └────────┬─────────┘
+ ▼
+ ┌──────────────────┐
+ │ Deduplicator │ ← Loại trùng theo phone_normalized UNIQUE
+ └────────┬─────────┘
+ │
+ ┌────────────────────┼────────────────────┐
+ ▼ ▼ ▼
+ ┌──────────┐ ┌──────────┐ ┌──────────┐
+ │ SQLite │ │ Google │ │ Export │
+ │ DB │ │ Sheets │ │Excel/CSV │
+ └──────────┘ └──────────┘ └──────────┘
 ```
 
 ## Kiến trúc thư mục
 
 ```
 lead-phone-collector/
-├── collectors/          # Module 1 — Thu thập
-│   ├── google_maps.py   
-│   └── facebook.py      
-├── processors/          # Module 2+3 — Xử lý
-│   ├── extractor.py     
-│   └── normalizer.py    
-├── storage/             # Module 4 — Lưu trữ
-│   ├── database.py      
-│   └── sheets.py        
-├── exporters/           # Module 5 — Xuất file
-│   ├── excel_export.py  
-│   └── csv_export.py    
-├── ui/                  # Giao diện web (Flask)
-│   ├── app.py           
-│   ├── templates/       
-│   └── static/          
+├── collectors/ # Module Thu thập (Playwright)
+│ ├── google_maps.py # Scraping Google Maps places & contact details
+│ └── facebook.py # Facebook collector (Page, Group, Search & Graph API)
+├── processors/ # Module Xử lý SĐT
+│ ├── extractor.py # Regex nhận diện SĐT trong văn bản
+│ └── normalizer.py # Chuẩn hóa 10 chữ số, validate & nhận diện nhà mạng
+├── storage/ # Module Lưu trữ & Phiên làm việc
+│ ├── database.py # SQLite CRUD, dedup & Fuzzy Search engine
+│ ├── auth.py # Session & Cookies Manager (FB/Google login)
+│ └── sheets.py # Google Sheets sync (gspread)
+├── exporters/ # Module Xuất dữ liệu
+│ ├── excel_export.py # Xuất Excel (.xlsx multi-sheet)
+│ └── csv_export.py # Xuất CSV (UTF-8 BOM)
+├── ui/ # Giao diện web (Flask Dashboard)
+│ ├── app.py # Routes & API endpoints
+│ ├── templates/ # HTML templates (Dashboard, Leads, Jobs, Login)
+│ └── static/ # CSS & Client-side JS
 ├── config/
-│   ├── settings.py      
-│   └── .env.example     
-├── docs/                # Tài liệu
-├── tests/               # Unit tests
+│ ├── settings.py # Configuration manager
+│ └── .env.example # Environment template
+├── docs/ # Tài liệu kỹ thuật & Hướng dẫn (01-07)
+├── tests/ # Unit tests (pytest)
 ├── data/
-│   ├── leads.db         # Database SQLite
-│   └── exports/         # File xuất
-├── logs/
-├── main.py              # CLI
+│ ├── leads.db # Database SQLite
+│ ├── cookies/ # Session cookies đã đăng nhập (fb_cookies.json, ...)
+│ └── exports/ # File xuất báo cáo
+├── logs/ # System log files
+├── main.py # CLI entry point
 └── requirements.txt
 ```
 
@@ -78,22 +85,26 @@ lead-phone-collector/
 
 | Module | File | Chức năng |
 |--------|------|-----------|
-| Collector | `collectors/google_maps.py` | Selenium scraping Google Maps |
-| Collector | `collectors/facebook.py` | Graph API + Selenium public pages |
-| Extractor | `processors/extractor.py` | Regex nhận diện SĐT VN |
-| Normalizer | `processors/normalizer.py` | Chuẩn hóa + validate + carrier detect |
-| Database | `storage/database.py` | SQLite CRUD + dedup |
-| Sheets | `storage/sheets.py` | Google Sheets sync |
-| Export | `exporters/excel_export.py` | Xuất Excel |
-| Export | `exporters/csv_export.py` | Xuất CSV |
-| Web UI | `ui/app.py` | Flask dashboard |
-| CLI | `main.py` | Command-line interface |
+| Collector Maps | `collectors/google_maps.py` | Playwright scraping Google Maps places & contact info |
+| Collector FB | `collectors/facebook.py` | Playwright & Graph API scraping Pages, Groups, Search |
+| Extractor | `processors/extractor.py` | Nhận diện 10+ mẫu SĐT VN trong văn bản thô |
+| Normalizer | `processors/normalizer.py` | Chuẩn hóa SĐT thành 10 chữ số + nhận diện nhà mạng |
+| Database | `storage/database.py` | SQLite CRUD, Deduplication & Fuzzy Search (unaccented) |
+| Auth Session | `storage/auth.py` | Quản lý phiên đăng nhập tương tác & lưu Playwright cookies |
+| Sheets Sync | `storage/sheets.py` | Sync dữ liệu tự động với Google Sheets qua Service Account |
+| Export Excel | `exporters/excel_export.py` | Xuất dữ liệu ra Excel (.xlsx) kèm sheet Thống kê |
+| Export CSV | `exporters/csv_export.py` | Xuất dữ liệu ra CSV định dạng UTF-8 BOM |
+| Web UI | `ui/app.py` | Flask Web UI dashboard điều khiển & quản lý |
+| CLI Entry | `main.py` | Command-line interface cho tất cả tác vụ |
 
 ## Stack công nghệ
 
 - **Language**: Python 3.10+
-- **Scraping**: Selenium + undetected-chromedriver
-- **Database**: SQLite (không cần cài đặt server)
-- **Google Sheets**: gspread + Service Account
-- **Web UI**: Flask (lightweight)
-- **Export**: openpyxl (Excel), csv stdlib (CSV)
+- **Scraping Engine**: Playwright Chromium (stealth mode, context isolation)
+- **Session & Auth**: Playwright Browser Context Cookie Storage
+- **Database**: SQLite (built-in, zero-config, indexing support)
+- **Search Engine**: SQLite + Custom Unaccented Fuzzy Matching
+- **Google Sheets**: gspread + Google Cloud Service Account
+- **Web Framework**: Flask (REST API + Jinja2 Templates)
+- **Exporting**: openpyxl (Excel), csv stdlib (CSV)
+

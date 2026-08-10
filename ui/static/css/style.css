@@ -356,11 +356,82 @@ body {
 /* ── Source Tags ──────────────────────────────────────── */
 .source-tag {
   font-size: 11px;
-  padding: 2px 8px;
+  padding: 3px 8px;
   border-radius: 4px;
-  background: var(--bg);
-  color: var(--text-muted);
+  background: #F1F3F4;
+  color: #3C4043;
   font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  text-decoration: none;
+  transition: all var(--transition);
+  border: 1px solid transparent;
+}
+
+a.source-tag {
+  cursor: pointer;
+}
+
+a.source-tag:hover {
+  background: var(--primary-light, #E8F0FE);
+  color: var(--primary, #1A73E8);
+  border-color: var(--primary, #1A73E8);
+  text-decoration: none;
+  box-shadow: 0 1px 4px rgba(26, 115, 232, 0.18);
+  transform: translateY(-1px);
+}
+
+.source-tag .source-icon {
+  font-size: 10px;
+  opacity: 0.65;
+  transition: opacity 0.2s ease;
+}
+
+a.source-tag:hover .source-icon {
+  opacity: 1;
+}
+
+/* Specific Source Tag Colors */
+.source-tag--fb-post {
+  background: #E7F3FF;
+  color: #1877F2;
+  border-color: #BDDBFF;
+}
+.source-tag--fb-comment {
+  background: #E0F2FE;
+  color: #0284C7;
+  border-color: #BAE6FD;
+}
+.source-tag--fb-profile {
+  background: #F3E8FF;
+  color: #7E22CE;
+  border-color: #E9D5FF;
+}
+.source-tag--fb-liker {
+  background: #F0F9FF;
+  color: #0369A1;
+  border-color: #E0F2FE;
+}
+.source-tag--fb-default {
+  background: #E7F3FF;
+  color: #1877F2;
+  border-color: #BDDBFF;
+}
+.source-tag--maps-details {
+  background: #E6F4EA;
+  color: #137333;
+  border-color: #CEEAD6;
+}
+.source-tag--maps-comment {
+  background: #FEF3C7;
+  color: #B45309;
+  border-color: #FDE68A;
+}
+.source-tag--default {
+  background: #F1F3F4;
+  color: #3C4043;
+  border-color: #E0E0E0;
 }
 
 /* ── Phone number ─────────────────────────────────────── */

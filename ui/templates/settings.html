@@ -29,12 +29,12 @@
     </div>
   </div>
 
-  <!-- Facebook -->
+  <!-- Facebook Graph API -->
   <div class="card">
     <div class="card__header">
       <h2 class="card__title">📘 Facebook Graph API</h2>
       <span class="badge {% if config.facebook_token_configured %}badge--success{% else %}badge--info{% endif %}">
-        {% if config.facebook_token_configured %}Có Token{% else %}Dùng Selenium{% endif %}
+        {% if config.facebook_token_configured %}Có Token{% else %}Dùng Playwright{% endif %}
       </span>
     </div>
     <div class="card__body">
@@ -44,7 +44,7 @@
           {% if config.facebook_token_configured %}
             <span class="text-success">✓ Đã cấu hình</span>
           {% else %}
-            <span class="text-muted">Không có (dùng Selenium public)</span>
+            <span class="text-muted">Không có (dùng Playwright public)</span>
           {% endif %}
         </div>
       </div>
@@ -55,17 +55,98 @@
     </div>
   </div>
 
-  <!-- Selenium -->
+  <!-- Session Authentication -->
+  <div class="card" style="grid-column: 1 / -1;">
+    <div class="card__header">
+      <h2 class="card__title">🔑 Phiên Đăng Nhập Tài Khoản (Facebook & Google)</h2>
+    </div>
+    <div class="card__body">
+      <p class="setting-hint mb-3">
+        Đăng nhập giúp trình duyệt truy cập thông tin các Hội Nhóm (Groups), bài viết giới hạn, hoặc kết quả tìm kiếm Facebook/Google mà chế độ ẩn danh không thấy được.
+      </p>
+
+      <div style="display: flex; gap: 24px; flex-wrap: wrap;">
+        <!-- Facebook Session Card -->
+        <div style="flex: 1; min-width: 280px; padding: 16px; border: 1px solid var(--border-color, #e2e8f0); border-radius: 8px; background: rgba(0,0,0,0.02);">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 12px;">
+            <h3 style="margin:0; font-size:16px;">📘 Facebook Account</h3>
+            <span class="badge {% if config.is_fb_logged_in %}badge--success{% else %}badge--warning{% endif %}">
+              {% if config.is_fb_logged_in %}✓ Đã đăng nhập{% else %}Chưa đăng nhập (Ẩn danh){% endif %}
+            </span>
+          </div>
+          <div style="display:flex; gap:8px;">
+            <form method="POST" action="{{ url_for('auth_login', service='facebook') }}" style="flex:1;">
+              <button type="submit" class="btn btn--blue btn--full btn--sm">
+                🔑 Đăng nhập (Mở trình duyệt)
+              </button>
+            </form>
+            {% if config.is_fb_logged_in %}
+            <form method="POST" action="{{ url_for('auth_logout', service='facebook') }}">
+              <button type="submit" class="btn btn--outline btn--sm" style="color:var(--color-danger, #ef4444);">
+                ❌ Xóa
+              </button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+
+        <!-- Google Session Card -->
+        <div style="flex: 1; min-width: 280px; padding: 16px; border: 1px solid var(--border-color, #e2e8f0); border-radius: 8px; background: rgba(0,0,0,0.02);">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 12px;">
+            <h3 style="margin:0; font-size:16px;">🌐 Google Account</h3>
+            <span class="badge {% if config.is_google_logged_in %}badge--success{% else %}badge--warning{% endif %}">
+              {% if config.is_google_logged_in %}✓ Đã đăng nhập{% else %}Chưa đăng nhập (Ẩn danh){% endif %}
+            </span>
+          </div>
+          <div style="display:flex; gap:8px;">
+            <form method="POST" action="{{ url_for('auth_login', service='google') }}" style="flex:1;">
+              <button type="submit" class="btn btn--primary btn--full btn--sm">
+                🔑 Đăng nhập (Mở trình duyệt)
+              </button>
+            </form>
+            {% if config.is_google_logged_in %}
+            <form method="POST" action="{{ url_for('auth_logout', service='google') }}">
+              <button type="submit" class="btn btn--outline btn--sm" style="color:var(--color-danger, #ef4444);">
+                ❌ Xóa
+              </button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <!-- Paste JSON Cookies Form -->
+      <details style="margin-top: 16px;">
+        <summary style="cursor: pointer; color: var(--color-primary, #3b82f6); font-weight: 500;">
+          🛠️ Dán thủ công JSON phiên làm việc (Storage State / Cookies)
+        </summary>
+        <div style="display:flex; gap:16px; margin-top:12px; flex-wrap:wrap;">
+          <form method="POST" action="{{ url_for('auth_save_json', service='facebook') }}" style="flex:1; min-width:280px;">
+            <label class="form-label">FB storage_state JSON</label>
+            <textarea name="cookie_json" class="form-input" rows="3" placeholder='{"cookies": [...], "origins": [...]}' style="font-family:monospace; font-size:12px;"></textarea>
+            <button type="submit" class="btn btn--outline btn--sm mt-2">Lưu FB JSON</button>
+          </form>
+          <form method="POST" action="{{ url_for('auth_save_json', service='google') }}" style="flex:1; min-width:280px;">
+            <label class="form-label">Google storage_state JSON</label>
+            <textarea name="cookie_json" class="form-input" rows="3" placeholder='{"cookies": [...], "origins": [...]}' style="font-family:monospace; font-size:12px;"></textarea>
+            <button type="submit" class="btn btn--outline btn--sm mt-2">Lưu Google JSON</button>
+          </form>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- Playwright Browser -->
   <div class="card">
     <div class="card__header">
-      <h2 class="card__title">🌐 Selenium</h2>
+      <h2 class="card__title">🎭 Playwright Browser</h2>
     </div>
     <div class="card__body">
       <div class="setting-row">
         <div class="setting-label">Headless mode</div>
         <div class="setting-value">
-          <span class="badge {% if config.selenium_headless %}badge--success{% else %}badge--warning{% endif %}">
-            {{ 'Bật (ẩn browser)' if config.selenium_headless else 'Tắt (thấy browser)' }}
+          <span class="badge {% if config.playwright_headless or config.selenium_headless %}badge--success{% else %}badge--warning{% endif %}">
+            {{ 'Bật (ẩn browser)' if (config.playwright_headless or config.selenium_headless) else 'Tắt (thấy browser)' }}
           </span>
         </div>
       </div>
@@ -74,7 +155,7 @@
         <div class="setting-value">{{ config.delay_min }}s – {{ config.delay_max }}s</div>
       </div>
       <div class="setting-hint">
-        Để thay đổi: chỉnh <code>SELENIUM_HEADLESS</code>, <code>SELENIUM_DELAY_MIN/MAX</code> trong <code>.env</code>.
+        Để thay đổi: chỉnh <code>PLAYWRIGHT_HEADLESS</code>, <code>PLAYWRIGHT_DELAY_MIN/MAX</code> trong <code>.env</code>.
       </div>
     </div>
   </div>

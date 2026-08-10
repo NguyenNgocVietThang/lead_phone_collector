@@ -15,6 +15,7 @@ from openpyxl.utils import get_column_letter
 
 from config.settings import settings
 from storage.database import Lead
+from processors.source_helper import format_source_label
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,8 @@ _COLUMNS = [
     ("Tên", 30),
     ("Số điện thoại", 16),
     ("Nhà mạng", 14),
-    ("Nguồn", 18),
+    ("Nguồn", 22),
+    ("Người tìm kiếm", 24),
     ("URL nguồn", 45),
     ("Địa chỉ", 40),
     ("Website", 35),
@@ -132,7 +134,8 @@ class ExcelExporter:
                 lead.name or "",
                 lead.phone_normalized or "",
                 lead.carrier or "",
-                lead.source or "",
+                format_source_label(lead.source or ""),
+                lead.collector_user or "",
                 lead.source_url or "",
                 lead.address or "",
                 lead.website or "",

@@ -30,10 +30,21 @@
     <div class="stat-card__icon">📘</div>
     <div class="stat-card__body">
       <div class="stat-card__value">
-        {{ (stats.by_source.get('fb_selenium_post', 0) +
-            stats.by_source.get('fb_selenium_comment', 0) +
-            stats.by_source.get('fb_graph_post', 0) +
-            stats.by_source.get('fb_selenium_about', 0)) }}
+        {{ (stats.by_source.get('fb_playwright_post', 0) +
+            stats.by_source.get('fb_playwright_comment', 0) +
+            stats.by_source.get('fb_playwright_about', 0) +
+            stats.by_source.get('fb_playwright_liker', 0) +
+            stats.by_source.get('fb_profile_bio', 0) +
+            stats.by_source.get('fb_profile_post', 0) +
+            stats.by_source.get('fb_profile_comment', 0) +
+            stats.by_source.get('fb_profile_liker', 0) +
+            stats.by_source.get('fb_group_post', 0) +
+            stats.by_source.get('fb_group_comment', 0) +
+            stats.by_source.get('fb_group_liker', 0) +
+            stats.by_source.get('fb_search_post', 0) +
+            stats.by_source.get('fb_search_comment', 0) +
+            stats.by_source.get('fb_search_liker', 0) +
+            stats.by_source.get('fb_graph_post', 0)) }}
       </div>
       <div class="stat-card__label">Từ Facebook</div>
     </div>
@@ -73,30 +84,60 @@
 
   <!-- Facebook Form -->
   <div class="card">
-    <div class="card__header">
+    <div class="card__header" style="display:flex; justify-content:space-between; align-items:center;">
       <h2 class="card__title">📘 Thu thập từ Facebook</h2>
+      <a href="{{ url_for('settings_page') }}" class="badge badge--info" style="text-decoration:none;" title="Chỉnh sửa session đăng nhập trong phần Cấu hình">
+        🔑 Session: Ẩn danh / Login
+      </a>
     </div>
     <div class="card__body">
       <form method="POST" action="{{ url_for('collect_facebook') }}" id="form-fb">
         <div class="form-group">
-          <label class="form-label" for="page_url">URL Facebook Page *</label>
-          <input type="url" id="page_url" name="page_url" class="form-input"
+          <label class="form-label">Loại mục tiêu</label>
+          <div class="radio-group" style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
+            <label class="checkbox-label">
+              <input type="radio" name="target_type" value="page" checked onchange="updateFbPlaceholder('page')">
+              📄 Fanpage
+            </label>
+            <label class="checkbox-label">
+              <input type="radio" name="target_type" value="profile" onchange="updateFbPlaceholder('profile')">
+              👤 Profile cá nhân
+            </label>
+            <label class="checkbox-label">
+              <input type="radio" name="target_type" value="group" onchange="updateFbPlaceholder('group')">
+              👥 Hội Nhóm (Group)
+            </label>
+            <label class="checkbox-label">
+              <input type="radio" name="target_type" value="search" onchange="updateFbPlaceholder('search')">
+              🔍 Tìm kiếm từ khóa
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" id="label-fb-input" for="target_value">URL Facebook Page *</label>
+          <input type="text" id="target_value" name="target_value" class="form-input"
                  placeholder="https://www.facebook.com/tenpage" required>
         </div>
+
         <div class="form-group">
           <label class="form-label">Nguồn thu thập</label>
-          <div class="checkbox-group">
-            <label class="checkbox-label">
-              <input type="checkbox" name="sources" value="about" checked>
-              Giới thiệu (About)
+          <div class="checkbox-group" style="display:flex; gap:10px; flex-wrap:wrap;">
+            <label class="checkbox-label" id="lbl-about">
+              <input type="checkbox" name="sources" value="about" checked id="chk-about">
+              Giới thiệu / Bio
             </label>
             <label class="checkbox-label">
               <input type="checkbox" name="sources" value="posts" checked>
-              Bài viết (Posts)
+              Bài viết & Người đăng
             </label>
             <label class="checkbox-label">
               <input type="checkbox" name="sources" value="comments" checked>
               Bình luận (Comments)
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" name="sources" value="likers" checked>
+              👍 Lượt thích (Likers)
             </label>
           </div>
         </div>
@@ -106,12 +147,38 @@
                  value="30" min="5" max="100">
         </div>
         <button type="submit" class="btn btn--blue btn--full" id="btn-fb">
-          <span class="btn__icon">🔍</span> Bắt đầu thu thập
+          <span class="btn__icon">🔍</span> Bắt đầu thu thập Facebook
         </button>
       </form>
     </div>
   </div>
 </div>
+
+<script>
+function updateFbPlaceholder(type) {
+  const label = document.getElementById('label-fb-input');
+  const input = document.getElementById('target_value');
+  const lblAbout = document.getElementById('lbl-about');
+
+  if (type === 'page') {
+    label.innerText = 'URL Facebook Page *';
+    input.placeholder = 'https://www.facebook.com/tenpage';
+    if (lblAbout) lblAbout.style.display = 'inline-flex';
+  } else if (type === 'profile') {
+    label.innerText = 'URL Profile cá nhân *';
+    input.placeholder = 'https://www.facebook.com/username hoặc profile.php?id=...';
+    if (lblAbout) lblAbout.style.display = 'inline-flex';
+  } else if (type === 'group') {
+    label.innerText = 'URL Hội Nhóm (Group) *';
+    input.placeholder = 'https://www.facebook.com/groups/ten-hoi-nhom';
+    if (lblAbout) lblAbout.style.display = 'none';
+  } else if (type === 'search') {
+    label.innerText = 'Từ khóa tìm kiếm Facebook *';
+    input.placeholder = 'VD: sang nhượng spa hà nội, bán chung cư...';
+    if (lblAbout) lblAbout.style.display = 'none';
+  }
+}
+</script>
 
 <!-- Recent Jobs -->
 {% if recent_jobs %}
@@ -123,7 +190,7 @@
     <table class="table">
       <thead>
         <tr>
-          <th>ID</th><th>Nguồn</th><th>Query</th>
+          <th>ID</th><th>Nguồn</th><th>Query</th><th>Người tìm</th>
           <th>Trạng thái</th><th>Tìm được</th><th>Mới</th><th>Thời gian</th>
         </tr>
       </thead>
@@ -132,7 +199,8 @@
         <tr>
           <td><a href="{{ url_for('job_status_page', job_id=job.id) }}">#{{ job.id }}</a></td>
           <td><span class="badge badge--{{ 'green' if job.source == 'google_maps' else 'blue' }}">{{ job.source }}</span></td>
-          <td class="text-truncate" style="max-width:200px">{{ job.query }}</td>
+          <td class="text-truncate" style="max-width:180px">{{ job.query }}</td>
+          <td><span class="user-badge" style="font-size:12px; color:#475569;">👤 {{ job.collector_user or 'Chưa rõ' }}</span></td>
           <td><span class="badge badge--{{ 'success' if job.status == 'done' else ('danger' if job.status == 'failed' else 'warning') }}">{{ job.status }}</span></td>
           <td>{{ job.total_found or 0 }}</td>
           <td>{{ job.new_leads or 0 }}</td>
@@ -155,7 +223,7 @@
   <div class="card__body p-0">
     <table class="table">
       <thead>
-        <tr><th>SĐT</th><th>Tên</th><th>Nhà mạng</th><th>Nguồn</th><th>Ngày</th></tr>
+        <tr><th>SĐT</th><th>Tên</th><th>Nhà mạng</th><th>Nguồn</th><th>Người tìm</th><th>Ngày</th></tr>
       </thead>
       <tbody>
         {% for lead in recent_leads %}
@@ -163,7 +231,29 @@
           <td><strong class="phone-number">{{ lead.phone_normalized }}</strong></td>
           <td>{{ lead.name or '—' }}</td>
           <td><span class="badge badge--carrier">{{ lead.carrier or '?' }}</span></td>
-          <td><span class="source-tag">{{ lead.source }}</span></td>
+          <td>
+            {% set s_info = lead.source|source_info %}
+            {% set target_url = lead.source_url %}
+            {% if not target_url %}
+              {% if s_info.category == 'google_maps' %}
+                {% set target_url = 'https://www.google.com/maps/search/?api=1&query=' ~ (lead.name or lead.address or lead.phone_normalized)|urlencode %}
+              {% elif s_info.category == 'facebook' %}
+                {% set target_url = 'https://www.facebook.com' %}
+              {% endif %}
+            {% endif %}
+            {% if target_url %}
+            <a href="{{ target_url }}" target="_blank" rel="noopener noreferrer" class="source-tag {{ s_info.badge_class }}" title="Nguồn: {{ s_info.label }} | Mở link: {{ target_url }}">
+              <span>{{ s_info.icon }} {{ s_info.short_label }}</span> <span class="source-icon">🔗</span>
+            </a>
+            {% else %}
+            <span class="source-tag {{ s_info.badge_class }}" title="Nguồn: {{ s_info.label }}">
+              <span>{{ s_info.icon }} {{ s_info.short_label }}</span>
+            </span>
+            {% endif %}
+          </td>
+          <td>
+            <span class="user-badge" style="font-size:12px; color:#475569;">👤 {{ lead.collector_user or 'Chưa rõ' }}</span>
+          </td>
           <td class="text-muted text-sm">{{ lead.collected_at[:10] if lead.collected_at else '' }}</td>
         </tr>
         {% endfor %}

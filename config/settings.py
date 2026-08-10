@@ -32,6 +32,20 @@ class Settings:
     GOOGLE_SHEET_ID: str = os.getenv("GOOGLE_SHEET_ID", "")
     GOOGLE_SHEET_NAME: str = os.getenv("GOOGLE_SHEET_NAME", "Leads")
 
+    # ── Auth Sessions ──────────────────────────────────────────────────────
+    FB_AUTH_PATH: Path = BASE_DIR / "data" / "fb_auth.json"
+    GOOGLE_AUTH_PATH: Path = BASE_DIR / "data" / "google_auth.json"
+
+    @property
+    def is_fb_logged_in(self) -> bool:
+        """True nếu file phiên đăng nhập Facebook tồn tại."""
+        return self.FB_AUTH_PATH.exists() and self.FB_AUTH_PATH.stat().st_size > 10
+
+    @property
+    def is_google_logged_in(self) -> bool:
+        """True nếu file phiên đăng nhập Google tồn tại."""
+        return self.GOOGLE_AUTH_PATH.exists() and self.GOOGLE_AUTH_PATH.stat().st_size > 10
+
     # ── Facebook ───────────────────────────────────────────────────────────
     FACEBOOK_ACCESS_TOKEN: str = os.getenv("FACEBOOK_ACCESS_TOKEN", "")
     FACEBOOK_APP_ID: str = os.getenv("FACEBOOK_APP_ID", "")
@@ -42,11 +56,23 @@ class Settings:
         """True nếu có đủ thông tin để dùng Facebook Graph API."""
         return bool(self.FACEBOOK_ACCESS_TOKEN)
 
-    # ── Selenium ───────────────────────────────────────────────────────────
-    CHROME_DRIVER_PATH: str = os.getenv("CHROME_DRIVER_PATH", "")
-    SELENIUM_HEADLESS: bool = os.getenv("SELENIUM_HEADLESS", "true").lower() == "true"
-    SELENIUM_DELAY_MIN: float = float(os.getenv("SELENIUM_DELAY_MIN", "1.5"))
-    SELENIUM_DELAY_MAX: float = float(os.getenv("SELENIUM_DELAY_MAX", "3.5"))
+    # ── Playwright Browser ──────────────────────────────────────────────────
+    PLAYWRIGHT_HEADLESS: bool = os.getenv("PLAYWRIGHT_HEADLESS", os.getenv("SELENIUM_HEADLESS", "true")).lower() == "true"
+    PLAYWRIGHT_DELAY_MIN: float = float(os.getenv("PLAYWRIGHT_DELAY_MIN", os.getenv("SELENIUM_DELAY_MIN", "1.5")))
+    PLAYWRIGHT_DELAY_MAX: float = float(os.getenv("PLAYWRIGHT_DELAY_MAX", os.getenv("SELENIUM_DELAY_MAX", "3.5")))
+
+    # Compatibility properties for legacy Selenium references
+    @property
+    def SELENIUM_HEADLESS(self) -> bool:
+        return self.PLAYWRIGHT_HEADLESS
+
+    @property
+    def SELENIUM_DELAY_MIN(self) -> float:
+        return self.PLAYWRIGHT_DELAY_MIN
+
+    @property
+    def SELENIUM_DELAY_MAX(self) -> float:
+        return self.PLAYWRIGHT_DELAY_MAX
 
     # ── Flask ──────────────────────────────────────────────────────────────
     FLASK_SECRET_KEY: str = os.getenv("FLASK_SECRET_KEY", "dev-secret-change-in-production")

@@ -1,106 +1,103 @@
-# 07 — Hướng dẫn Export
+# 07 — Hướng dẫn Export & Tích hợp Google Sheets
 
-## Định dạng hỗ trợ
+## Các định dạng xuất dữ liệu
 
-| Định dạng | File | Phù hợp |
-|-----------|------|---------|
-| Excel (.xlsx) | `exporters/excel_export.py` | Dùng ngay trong Excel, có format đẹp |
-| CSV (.csv) | `exporters/csv_export.py` | Import vào CRM, Google Sheets thủ công |
+| Định dạng | File thực thi | Phù hợp cho |
+|-----------|---------------|-------------|
+| **Excel (.xlsx)** | `exporters/excel_export.py` | Báo cáo chuyên nghiệp, có định dạng cột, màu sắc & sheet Thống kê |
+| **CSV (.csv)** | `exporters/csv_export.py` | Tích hợp CRM, hệ thống Telesale, Google Sheets thủ công (UTF-8 BOM) |
+| **Google Sheets** | `storage/sheets.py` | Đồng bộ dữ liệu tự động thời gian thực qua Cloud API |
 
 ---
 
-## Export Excel
+## 1. Export Excel (.xlsx)
 
 ### Qua Web UI
 
-1. Mở `http://localhost:5000/leads`
-2. Áp dụng bộ lọc nếu cần (theo nguồn, trạng thái, ngày)
-3. Click nút **"Tải Excel"**
+1. Đăng nhập Web UI tại `http://localhost:5000/leads`.
+2. Áp dụng bộ lọc tùy chọn (Từ khóa fuzzy search, Nguồn, Nhà mạng, Trạng thái, Khoảng ngày).
+3. Bấm nút **"Xuất Excel"** để tải file xuống trình duyệt.
 
 ### Qua CLI
 
 ```bash
-# Xuất tất cả leads
+# Xuất toàn bộ danh sách leads
 python main.py export --format excel
 
-# Xuất theo nguồn
-python main.py export --format excel --source google_maps
+# Xuất có bộ lọc nguồn & trạng thái
+python main.py export --format excel --source fb_group_post --status new
 
-# Xuất leads mới (status=new)
-python main.py export --format excel --status new
-
-# Chỉ định file output
-python main.py export --format excel --output "d:\bao_cao_leads.xlsx"
+# Chỉ định đường dẫn lưu file cụ thể
+python main.py export --format excel --output "d:\bao_cao_khach_hang.xlsx"
 ```
 
-### Cấu trúc file Excel
+### Cấu trúc file Excel được tạo
 
-Sheet **"Leads"**:
+- **Sheet 1: "Leads"** (Định dạng tiêu đề nổi bật, tự động căn chỉnh độ rộng cột):
+ - Cột A: ID
+ - Cột B: Tên trang / Khách hàng
+ - Cột C: Số điện thoại (Format Text giữ nguyên số `0` ở đầu)
+ - Cột D: Nhà mạng (Viettel, Vinaphone, Mobifone, ...)
+ - Cột E: Nguồn thu thập
+ - Cột F: Đường dẫn URL bài viết / trang
+ - Cột G: Địa chỉ (Google Maps)
+ - Cột H: Website
+ - Cột I: Trạng thái (`new`, `contacted`, `qualified`, `rejected`)
+ - Cột J: Ghi chú
+ - Cột K: Thời điểm thu thập
 
-| Cột | Nội dung |
-|-----|---------|
-| A | ID |
-| B | Tên |
-| C | Số điện thoại |
-| D | Nhà mạng |
-| E | Nguồn |
-| F | URL nguồn |
-| G | Địa chỉ |
-| H | Website |
-| I | Nội dung chứa SĐT |
-| J | Trạng thái |
-| K | Ngày thu thập |
-
-Sheet **"Thống kê"**: tóm tắt số lượng theo nguồn và nhà mạng.
+- **Sheet 2: "Thống kê"**:
+ - Bảng tổng hợp số lượng SĐT theo từng Nguồn dữ liệu.
+ - Bảng phân bố thị phần theo từng Nhà mạng viễn thông.
 
 ---
 
-## Export CSV
+## 2. Export CSV (.csv)
 
 ```bash
 python main.py export --format csv --output "leads.csv"
 ```
 
-- Encoding: **UTF-8 BOM** (tương thích Excel tiếng Việt)
-- Delimiter: dấu phẩy (`,`)
-- Có header row
+- **Mã hóa Encoding**: `UTF-8 với BOM` (`utf-8-sig`) — Tự động hiển thị đúng tiếng Việt có dấu khi mở trực tiếp bằng Microsoft Excel mà không bị lỗi font.
+- **Ký tự phân cách (Delimiter)**: Dấu phẩy (`,`).
 
 ---
 
-## Google Sheets (Tự động)
+## 3. Tự động Sync với Google Sheets (`storage/sheets.py`)
 
-Sync tự động sau mỗi job thu thập. Không cần thao tác thủ công.
+Hệ thống hỗ trợ tự động đẩy dữ liệu SĐT mới thu thập sang Google Sheet trực tuyến sau mỗi lần scraper chạy thành công.
 
-### Cấu hình
+### Cấu hình `.env`
 
 ```env
 GOOGLE_SHEET_ID=1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms
-GOOGLE_SHEET_NAME=Leads
+GOOGLE_SHEETS_CREDENTIALS_FILE=config/google-service-account.json
 ```
 
-### Cấu trúc Sheet
+### Cấu trúc Google Sheet
 
-Row 1 là header cố định:
+Dòng 1 là Tiêu đề cột (Header row) chuẩn:
 ```
-ID | Tên | Số điện thoại | Nhà mạng | Nguồn | URL | Địa chỉ | Website | Trạng thái | Ngày
+ID | Tên | Số điện thoại | Nhà mạng | Nguồn | URL | Địa chỉ | Website | Trạng thái | Ngày thu thập
 ```
 
-### Logic sync
+### Nguyên lý hoạt động Sync
 
-- Kiểm tra `phone_normalized` đã có trong Sheet chưa
-- Nếu chưa → append row mới
-- Không ghi đè hay xóa dữ liệu cũ
-- Sync bất đồng bộ (không block quá trình thu thập)
+1. Khi một job thu thập hoàn tất, hệ thống nạp các bản ghi SĐT mới.
+2. Kiểm tra danh sách `phone_normalized` đã tồn tại trên Sheet hay chưa.
+3. Chỉ thực hiện **`append_rows`** đối với các bản ghi mới (không ghi đè, không nhân bản dữ liệu cũ).
+4. Đảm bảo chạy mượt mà không làm gián đoạn tiến trình scraper chính.
 
 ---
 
-## File đặt tên tự động
+## Quản lý File Export tự động
 
-Export files được đặt tên theo timestamp:
+Các file xuất mặc định được lưu tự động tại thư mục `data/exports/` gắn kèm timestamp thời gian:
 
 ```
 data/exports/
 ├── leads_20260810_143022.xlsx
 ├── leads_20260810_143022.csv
-└── leads_google_maps_20260810_150000.xlsx
+└── leads_facebook_20260810_150000.xlsx
 ```
+

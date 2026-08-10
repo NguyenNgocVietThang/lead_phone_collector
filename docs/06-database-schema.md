@@ -2,101 +2,105 @@
 
 ## Tổng quan
 
-Dùng **SQLite** — không cần cài đặt server, file database tự tạo tại `data/leads.db`.
+Cơ sở dữ liệu sử dụng **SQLite** (`data/leads.db`) — zero-config, không cần cài đặt database server. Tự động khởi tạo schema & indexes khi ứng dụng chạy lần đầu.
 
 ---
 
-## Bảng `leads` — Dữ liệu chính
+## Bảng `leads` — Dữ liệu SĐT & Khách hàng
 
 ```sql
 CREATE TABLE IF NOT EXISTS leads (
-    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    name                TEXT,
-    phone_raw           TEXT NOT NULL,
-    phone_normalized    TEXT UNIQUE NOT NULL,
-    source              TEXT NOT NULL,
-    source_url          TEXT,
-    content             TEXT,
-    address             TEXT,
-    website             TEXT,
-    carrier             TEXT,
-    status              TEXT DEFAULT 'new',
-    notes               TEXT,
-    collected_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ name TEXT,
+ phone_raw TEXT NOT NULL,
+ phone_normalized TEXT UNIQUE NOT NULL,
+ source TEXT NOT NULL,
+ source_url TEXT,
+ content TEXT,
+ address TEXT,
+ website TEXT,
+ carrier TEXT,
+ status TEXT DEFAULT 'new',
+ notes TEXT,
+ collected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+ updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
 ### Mô tả các cột
 
-| Cột | Kiểu | Mô tả |
-|-----|------|-------|
-| `id` | INTEGER | Primary key tự tăng |
-| `name` | TEXT | Tên doanh nghiệp / trang / người |
-| `phone_raw` | TEXT | SĐT gốc chưa xử lý |
-| `phone_normalized` | TEXT UNIQUE | SĐT đã chuẩn hóa (dùng để dedup) |
-| `source` | TEXT | Nguồn dữ liệu (xem bảng dưới) |
-| `source_url` | TEXT | URL của trang chứa SĐT |
-| `content` | TEXT | Đoạn text xung quanh SĐT (context) |
-| `address` | TEXT | Địa chỉ (chủ yếu từ Google Maps) |
-| `website` | TEXT | Website (nếu có) |
-| `carrier` | TEXT | Nhà mạng (Viettel/Mobifone/...) |
-| `status` | TEXT | Trạng thái lead (xem bảng dưới) |
-| `notes` | TEXT | Ghi chú thủ công |
-| `collected_at` | DATETIME | Thời gian thu thập |
-| `updated_at` | DATETIME | Thời gian cập nhật cuối |
+| Cột | Kiểu dữ liệu | Mô tả |
+|-----|--------------|-------|
+| `id` | INTEGER | Primary Key tự tăng |
+| `name` | TEXT | Tên doanh nghiệp / Fanpage / Người đăng bài |
+| `phone_raw` | TEXT | SĐT thô ban đầu trích xuất được |
+| `phone_normalized` | TEXT UNIQUE | SĐT chuẩn hóa 10 chữ số (khóa loại trùng) |
+| `source` | TEXT | Mã nhận diện nguồn dữ liệu (xem bảng dưới) |
+| `source_url` | TEXT | Đường dẫn URL bài viết / trang chứa SĐT |
+| `content` | TEXT | Đoạn văn bản chứa SĐT (Ngữ cảnh / Context) |
+| `address` | TEXT | Địa chỉ (trích xuất từ Google Maps) |
+| `website` | TEXT | Trang web chính thức |
+| `carrier` | TEXT | Nhà mạng (Viettel, Mobifone, Vinaphone, ...) |
+| `status` | TEXT | Trạng thái lead (`new`, `contacted`, `qualified`, `rejected`) |
+| `notes` | TEXT | Ghi chú người dùng |
+| `collected_at` | DATETIME | Thời điểm thu thập |
+| `updated_at` | DATETIME | Thời điểm cập nhật cuối |
 
-### Giá trị `source`
+### Danh sách đầy đủ giá trị `source`
 
-| Giá trị | Mô tả |
-|---------|-------|
-| `google_maps` | Google Maps (Selenium) |
-| `fb_graph_post` | Facebook Graph API — từ post |
-| `fb_graph_comment` | Facebook Graph API — từ comment |
-| `fb_selenium_about` | Facebook Selenium — phần About |
-| `fb_selenium_post` | Facebook Selenium — nội dung post |
-| `fb_selenium_comment` | Facebook Selenium — comment |
+| Giá trị | Mô tả nguồn dữ liệu |
+|---------|---------------------|
+| `google_maps` | Thu thập từ Google Maps (Playwright) |
+| `fb_playwright_about` | Facebook Fanpage — phần "Giới thiệu" công khai |
+| `fb_playwright_post` | Facebook Fanpage — bài viết công khai |
+| `fb_playwright_comment` | Facebook Fanpage — bình luận bài viết |
+| `fb_group_post` | Facebook Group — bài viết trong nhóm |
+| `fb_group_comment` | Facebook Group — bình luận bài viết trong nhóm |
+| `fb_search_post` | Facebook Search — bài viết tìm theo từ khóa |
+| `fb_search_comment` | Facebook Search — bình luận tìm theo từ khóa |
+| `fb_graph_post` | Facebook Graph API — bài viết |
+| `fb_graph_comment` | Facebook Graph API — bình luận |
 
 ### Giá trị `status`
 
-| Giá trị | Mô tả |
-|---------|-------|
-| `new` | Mới thu thập, chưa xử lý |
-| `contacted` | Đã liên hệ |
-| `qualified` | Đã xác nhận là khách tiềm năng |
-| `rejected` | Loại (sai số, không phù hợp) |
+| Trạng thái | Mô tả |
+|------------|-------|
+| `new` | Lead mới thu thập, chưa xử lý |
+| `contacted` | Đã liên hệ (gọi điện / nhắn tin) |
+| `qualified` | Đã xác nhận nhu cầu (khách tiềm năng) |
+| `rejected` | Đã loại (sai số / không nghe máy / từ chối) |
 
 ---
 
-## Bảng `collection_jobs` — Theo dõi công việc
+## Bảng `collection_jobs` — Lịch sử & Tiến độ Thu thập
 
 ```sql
 CREATE TABLE IF NOT EXISTS collection_jobs (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    source          TEXT NOT NULL,
-    query           TEXT,
-    status          TEXT DEFAULT 'running',
-    total_found     INTEGER DEFAULT 0,
-    new_leads       INTEGER DEFAULT 0,
-    duplicates      INTEGER DEFAULT 0,
-    started_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-    finished_at     DATETIME,
-    error_message   TEXT
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ source TEXT NOT NULL,
+ query TEXT,
+ status TEXT DEFAULT 'running',
+ total_found INTEGER DEFAULT 0,
+ new_leads INTEGER DEFAULT 0,
+ duplicates INTEGER DEFAULT 0,
+ started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+ finished_at DATETIME,
+ error_message TEXT
 );
 ```
 
 | Cột | Mô tả |
 |-----|-------|
-| `source` | `google_maps` hoặc `facebook` |
-| `query` | Từ khóa hoặc URL đã tìm |
-| `status` | `running` / `done` / `failed` |
-| `total_found` | Tổng SĐT tìm được |
-| `new_leads` | SĐT mới (chưa có trong DB) |
-| `duplicates` | SĐT bị trùng (đã bỏ qua) |
+| `source` | Nguồn thu thập (`google_maps`, `facebook`, ...) |
+| `query` | Từ khóa, địa bàn, hoặc URL target |
+| `status` | Trạng thái công việc (`running`, `done`, `failed`) |
+| `total_found` | Tổng số SĐT quét được |
+| `new_leads` | Số SĐT mới được ghi vào DB |
+| `duplicates` | Số SĐT trùng đã bỏ qua |
 
 ---
 
-## Indexes
+## Indexes & Tối ưu truy vấn
 
 ```sql
 CREATE INDEX IF NOT EXISTS idx_leads_source ON leads(source);
@@ -107,23 +111,40 @@ CREATE INDEX IF NOT EXISTS idx_leads_carrier ON leads(carrier);
 
 ---
 
-## Queries hữu ích
+## SQL Queries & Python API hữu ích
+
+### 1. Python Fuzzy Search Query (`storage/database.py`)
+
+```python
+from storage.database import LeadDatabase
+
+db = LeadDatabase()
+
+# Tìm kiếm fuzzy (không dấu, khớp một phần)
+leads = db.search_leads(
+ query="ha noi", # Khớp với "Hà Nội", "Hanoi", "HÀ NỘI"
+ source="fb_group_post", # Lọc theo nguồn
+ carrier="Viettel", # Lọc nhà mạng
+ status="new", # Lọc trạng thái
+ match_type="fuzzy", # Chế độ fuzzy match
+ limit=50
+)
+```
+
+### 2. Thống kê theo nguồn và nhà mạng
 
 ```sql
--- Đếm lead theo nguồn
+-- Đếm tổng số SĐT theo nhà mạng
+SELECT carrier, COUNT(*) as count FROM leads GROUP BY carrier ORDER BY count DESC;
+
+-- Đếm số leads thu thập theo nguồn
 SELECT source, COUNT(*) as total FROM leads GROUP BY source;
 
--- Lead mới hôm nay
-SELECT * FROM leads WHERE date(collected_at) = date('now');
-
--- Leads của Viettel chưa liên hệ
-SELECT * FROM leads WHERE carrier = 'Viettel' AND status = 'new';
-
--- Tổng thống kê
+-- Tỷ lệ lead mới trong ngày hôm nay
 SELECT
-    COUNT(*) as total,
-    SUM(CASE WHEN status = 'new' THEN 1 ELSE 0 END) as new_count,
-    SUM(CASE WHEN status = 'contacted' THEN 1 ELSE 0 END) as contacted,
-    COUNT(DISTINCT carrier) as carriers
-FROM leads;
+ COUNT(*) as total_today,
+ SUM(CASE WHEN status = 'new' THEN 1 ELSE 0 END) as new_today
+FROM leads
+WHERE date(collected_at) = date('now');
 ```
+

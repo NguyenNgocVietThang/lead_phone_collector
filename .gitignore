@@ -5,6 +5,8 @@
 # Environment & secrets
 .env
 config/google-service-account.json
+data/fb_auth.json
+data/google_auth.json
 
 # Database
 data/leads.db

@@ -1,43 +1,44 @@
-# 02 — Hướng dẫn cài đặt
+# 02 — Hướng dẫn cài đặt & Vận hành
 
 ## Yêu cầu hệ thống
 
 - Python **3.10+**
-- Google Chrome đã cài đặt (dùng cho Selenium)
-- Internet connection
+- Playwright Chromium (tự động cài qua command)
+- OS: Windows 10/11, macOS, Linux
+- Trình duyệt Chrome/Edge (khi dùng tính năng đăng nhập tương tác)
 
-## Bước 1 — Clone / tải project
+## Bước 1 — Clone / Tải project
 
 ```bash
-# Hoặc tải ZIP và giải nén vào thư mục mong muốn
 cd "d:\Tool map fb"
 ```
 
-## Bước 2 — Tạo virtual environment
+## Bước 2 — Tạo Virtual Environment
 
 ```bash
 python -m venv venv
 
-# Windows
+# Windows (PowerShell / CMD)
 venv\Scripts\activate
 
-# macOS/Linux
+# macOS / Linux
 source venv/bin/activate
 ```
 
-## Bước 3 — Cài đặt dependencies
+## Bước 3 — Cài đặt Dependencies
 
 ```bash
 pip install -r requirements.txt
+playwright install chromium
 ```
 
 ## Bước 4 — Cấu hình .env
 
 ```bash
-# Copy template
+# Copy file template mẫu
 copy .env.example .env
 
-# Mở và điền thông tin
+# Mở và chỉnh sửa file .env
 notepad .env
 ```
 
@@ -45,85 +46,106 @@ notepad .env
 
 | Biến | Mô tả |
 |------|-------|
-| `GOOGLE_SHEET_ID` | ID của Google Sheet (lấy từ URL) |
-| `GOOGLE_SHEETS_CREDENTIALS_FILE` | Đường dẫn tới file JSON Service Account |
-| `FLASK_SECRET_KEY` | Chuỗi bí mật bất kỳ cho Flask session |
+| `GOOGLE_SHEET_ID` | ID của Google Sheet (lấy từ URL: `https://docs.google.com/spreadsheets/d/[SHEET_ID]`) |
+| `GOOGLE_SHEETS_CREDENTIALS_FILE` | Đường dẫn file JSON Service Account (`config/google-service-account.json`) |
+| `FLASK_SECRET_KEY` | Chuỗi secret bí mật dùng mã hóa session cho Flask UI |
 
 ### Các biến tùy chọn
 
-| Biến | Mô tả |
-|------|-------|
-| `FACEBOOK_ACCESS_TOKEN` | Token Graph API (chỉ cần nếu dùng Graph API) |
-| `SELENIUM_HEADLESS` | `true` để chạy ẩn, `false` để thấy browser |
-| `SELENIUM_DELAY_MIN/MAX` | Delay giữa requests (giây) |
+| Biến | Mô tả | Mặc định |
+|------|-------|----------|
+| `FACEBOOK_ACCESS_TOKEN` | Token Graph API (dùng nếu cào Page chính chủ) | Empty |
+| `PLAYWRIGHT_HEADLESS` | `true` để chạy ẩn, `false` để hiển thị cửa sổ browser | `true` |
+| `PLAYWRIGHT_DELAY_MIN` | Delay nhỏ nhất giữa các thao tác (giây) | `2.0` |
+| `PLAYWRIGHT_DELAY_MAX` | Delay lớn nhất giữa các thao tác (giây) | `5.0` |
+| `PLAYWRIGHT_NAV_TIMEOUT` | Timeout khi load trang (ms) | `30000` |
 
-## Bước 5 — Cấu hình Google Sheets
+---
 
-### 5.1 — Tạo Google Cloud Project
+## Bước 5 — Đăng nhập tương tác (Tùy chọn cho Facebook Group/Search)
 
-1. Vào [console.cloud.google.com](https://console.cloud.google.com/)
-2. Tạo project mới
-3. Enable **Google Sheets API** và **Google Drive API**
+Nếu muốn thu thập dữ liệu từ **Facebook Groups** hoặc **Facebook Search** yêu cầu tài khoản:
 
-### 5.2 — Tạo Service Account
+```bash
+# Khởi động trình duyệt đăng nhập tương tác cho Facebook
+python main.py login --service facebook
+```
 
-1. IAM & Admin → Service Accounts → Create
-2. Cấp role: **Editor**
-3. Tạo key → JSON → tải về
-4. Đặt file vào `config/google-service-account.json`
+Trình duyệt sẽ mở ra. Bạn thực hiện đăng nhập tài khoản Facebook cá nhân/phụ. Sau khi hoàn tất, hệ thống sẽ tự động lưu Session Cookies vào `data/cookies/fb_cookies.json` để các lần cào sau tự động sử dụng mà không cần login lại.
 
-### 5.3 — Share Google Sheet
+---
 
-1. Mở Google Sheet muốn sync
-2. Share → thêm email của Service Account (trong file JSON, trường `client_email`)
-3. Cấp quyền **Editor**
-4. Copy Sheet ID từ URL: `https://docs.google.com/spreadsheets/d/[SHEET_ID]/edit`
-5. Điền vào `.env`: `GOOGLE_SHEET_ID=...`
+## Bước 6 — Cấu hình Google Sheets (Sync tự động)
 
-## Bước 6 — Chạy ứng dụng
+1. Truy cập [Google Cloud Console](https://console.cloud.google.com/)
+2. Tạo Project mới và enable **Google Sheets API** & **Google Drive API**.
+3. Tạo **Service Account**, tạo JSON key và tải về lưu tại `config/google-service-account.json`.
+4. Mở Google Sheet cần lưu dữ liệu → Bấm **Share** → Thêm email Service Account (`client_email` trong JSON) với quyền **Editor**.
+5. Copy Sheet ID vào `.env`: `GOOGLE_SHEET_ID=...`.
 
-### Web UI (khuyến nghị)
+---
+
+## Bước 7 — Chạy Ứng Dụng
+
+### 7.1 Web UI (Khuyên dùng)
 
 ```bash
 python main.py ui
 # Mở trình duyệt tại: http://localhost:5000
 ```
 
-### CLI
+Giao diện Web cung cấp:
+- Dashboard thống kê tổng quan (Tổng số leads, số mới, phân loại nhà mạng, nguồn).
+- Công cụ kích hoạt scraper Google Maps & Facebook (Page/Group/Search) trực tiếp từ giao diện.
+- Trình quản lý phiên đăng nhập (Facebook / Google cookies).
+- Bảng tra cứu & Tìm kiếm Fuzzy Search (khớp một phần, tìm theo từ khóa không dấu, SĐT, tên).
+- Nút xuất file Excel (.xlsx) & CSV tức thì.
+
+### 7.2 CLI (Command Line)
 
 ```bash
-# Thu thập từ Google Maps
-python main.py maps --keyword "nhà hàng" --area "Hà Nội" --limit 50
+# 1. Thu thập từ Google Maps
+python main.py maps --keyword "nhà hàng" --area "Hà Nội" --limit 50 --show-browser
 
-# Thu thập từ Facebook page
-python main.py facebook --url "https://facebook.com/pagename"
+# 2. Thu thập từ Facebook Page công khai
+python main.py facebook --mode page --target "https://facebook.com/tenpage"
 
-# Xuất kết quả
-python main.py export --format excel
-python main.py export --format csv
+# 3. Thu thập từ Facebook Group
+python main.py facebook --mode group --target "https://facebook.com/groups/123456" --max-posts 30
+
+# 4. Thu thập từ Facebook Tìm kiếm từ khóa
+python main.py facebook --mode search --target "cần tìm mua căn hộ quận 7" --max-posts 50
+
+# 5. Xuất dữ liệu báo cáo
+python main.py export --format excel --output "data/exports/leads_moi.xlsx"
+python main.py export --format csv --output "data/exports/leads_moi.csv"
+
+# 6. Xem thống kê dữ liệu
+python main.py stats
 ```
 
-## Chạy Tests
+---
+
+## Kiểm tra Unit Tests
 
 ```bash
 pytest tests/ -v
 ```
 
-## Troubleshooting
+---
 
-### ChromeDriver không khớp phiên bản Chrome
+## Troubleshooting & Khắc phục lỗi
 
-Dự án dùng `webdriver-manager` — tự tải ChromeDriver phù hợp. Nếu lỗi:
+### 1. Lỗi `executable doesn't exist` (Playwright)
 ```bash
-pip install --upgrade webdriver-manager
+playwright install chromium
 ```
 
-### Bị block bởi Google Maps
+### 2. Facebook bắt đăng nhập / Không lấy được bài viết Group
+- Chạy `python main.py login --service facebook` để lưu cookies phiên làm việc.
+- Hoặc bật `--show-browser` trên CLI để kiểm tra giao diện trực quan.
 
-- Tăng delay: `SELENIUM_DELAY_MIN=3` và `SELENIUM_DELAY_MAX=6`
-- Thử `SELENIUM_HEADLESS=false` để dùng browser thật
+### 3. Google Sheets báo lỗi Permission Denied
+- Đảm bảo đã Share Google Sheet cho email của Service Account với quyền **Editor**.
+- Kiểm tra lại đường dẫn file JSON `GOOGLE_SHEETS_CREDENTIALS_FILE` trong `.env`.
 
-### Google Sheets lỗi permission
-
-- Kiểm tra email Service Account đã được share quyền Editor
-- Kiểm tra file JSON đúng đường dẫn trong `.env`

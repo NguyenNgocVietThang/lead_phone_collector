@@ -3,9 +3,8 @@
 # =============================================================================
 
 # Web scraping
-selenium>=4.15.0
-undetected-chromedriver>=3.5.5
-webdriver-manager>=4.0.1
+playwright>=1.40.0
+playwright-stealth>=1.0.6
 
 # HTTP requests
 requests>=2.31.0

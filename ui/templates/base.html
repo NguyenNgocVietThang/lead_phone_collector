@@ -37,7 +37,18 @@
     <!-- Top bar -->
     <header class="topbar">
       <div class="topbar__title">{% block page_title %}Dashboard{% endblock %}</div>
-      <div class="topbar__actions">{% block topbar_actions %}{% endblock %}</div>
+      <div class="topbar__actions" style="display:flex; align-items:center; gap:12px;">
+        {% block topbar_actions %}{% endblock %}
+        {% if session.get('user_identity') %}
+        <div class="user-profile-badge" style="display:flex; align-items:center; gap:8px; background:#F1F5F9; padding:5px 12px; border-radius:20px; border:1px solid #E2E8F0; font-size:13px;">
+          <span class="user-avatar" style="font-size:14px;">👤</span>
+          <strong class="user-name" style="color:#334155;" title="Người đăng nhập">{{ session.user_identity }}</strong>
+          <form method="POST" action="{{ url_for('logout') }}" style="display:inline; margin:0; padding:0;">
+            <button type="submit" class="btn-logout" style="background:none; border:none; color:#EF4444; font-size:12px; cursor:pointer; padding:2px 6px; font-weight:600; border-radius:4px;" title="Đăng xuất">🚪 Dừng</button>
+          </form>
+        </div>
+        {% endif %}
+      </div>
     </header>
 
     <!-- Flash messages -->

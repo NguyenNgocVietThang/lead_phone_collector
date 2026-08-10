@@ -82,13 +82,13 @@ class TestInsert:
 class TestQuery:
     def test_get_leads_all(self, tmp_db):
         tmp_db.insert_lead(make_lead(phone_normalized="0981234567", source="google_maps"))
-        tmp_db.insert_lead(make_lead(phone_normalized="0912345678", source="fb_selenium_post"))
+        tmp_db.insert_lead(make_lead(phone_normalized="0912345678", source="fb_playwright_post"))
         leads = tmp_db.get_leads()
         assert len(leads) == 2
 
     def test_get_leads_by_source(self, tmp_db):
         tmp_db.insert_lead(make_lead(phone_normalized="0981234567", source="google_maps"))
-        tmp_db.insert_lead(make_lead(phone_normalized="0912345678", source="fb_selenium_post"))
+        tmp_db.insert_lead(make_lead(phone_normalized="0912345678", source="fb_playwright_post"))
         maps_leads = tmp_db.get_leads(source="google_maps")
         assert len(maps_leads) == 1
         assert maps_leads[0].source == "google_maps"
@@ -109,6 +109,49 @@ class TestQuery:
     def test_get_lead_not_found(self, tmp_db):
         result = tmp_db.get_lead_by_id(99999)
         assert result is None
+
+    def test_search_fuzzy_unaccented(self, tmp_db):
+        tmp_db.insert_lead(make_lead(name="Cửa hàng Gia Dụng Hải Hải", phone_normalized="0981234567"))
+        tmp_db.insert_lead(make_lead(name="Thiết bị Điện Máy Hùng", phone_normalized="0912345678"))
+
+        # Search unaccented "hang gia dung" should match "Cửa hàng Gia Dụng Hải Hải"
+        results = tmp_db.get_leads(search="hang gia dung", search_mode="fuzzy")
+        assert len(results) == 1
+        assert results[0].phone_normalized == "0981234567"
+
+        # Search accented "hàng gia dụng" should also match
+        results2 = tmp_db.get_leads(search="hàng gia dụng", search_mode="fuzzy")
+        assert len(results2) == 1
+        assert results2[0].phone_normalized == "0981234567"
+
+    def test_search_partial_query_finds_subset(self, tmp_db):
+        # User requirement test: Searching "Cửa hàng gia dụng" must still find "Gia dụng"
+        tmp_db.insert_lead(make_lead(name="Gia Dụng Miền Nam", phone_normalized="0981112223"))
+        results = tmp_db.get_leads(search="Cửa hàng gia dụng")
+        assert len(results) == 1
+        assert results[0].name == "Gia Dụng Miền Nam"
+
+    def test_search_space_normalization_and_case_insensitivity(self, tmp_db):
+        tmp_db.insert_lead(make_lead(name="Cửa   hàng  Gia  Dụng", phone_normalized="0989998887"))
+        # Search with irregular spacing and mixed uppercase
+        results = tmp_db.get_leads(search="  CỬA   HÀNG   GIA   DỤNG  ")
+        assert len(results) == 1
+        assert results[0].phone_normalized == "0989998887"
+
+    def test_search_exact(self, tmp_db):
+        tmp_db.insert_lead(make_lead(name="Gia Dụng Cao Cấp", phone_normalized="0981112223"))
+        results_exact = tmp_db.get_leads(search="Gia Dụng Cao Cấp", search_mode="exact")
+        assert len(results_exact) == 1
+
+        results_fail = tmp_db.get_leads(search="Gia Dụng Giá Rẻ", search_mode="exact")
+        assert len(results_fail) == 0
+
+    def test_count_leads(self, tmp_db):
+        tmp_db.insert_lead(make_lead(name="Cửa hàng A", phone_normalized="0981234567", source="google_maps"))
+        tmp_db.insert_lead(make_lead(name="Cửa hàng B", phone_normalized="0912345678", source="fb_playwright_post"))
+        assert tmp_db.count_leads() == 2
+        assert tmp_db.count_leads(source="google_maps") == 1
+        assert tmp_db.count_leads(search="Cửa hàng A") == 2  # Matches both because "Cửa hàng" is shared, with A ranked higher
 
 
 class TestUpdate:
@@ -133,7 +176,7 @@ class TestStats:
 
     def test_stats_with_data(self, tmp_db):
         tmp_db.insert_lead(make_lead(phone_normalized="0981234567", source="google_maps"))
-        tmp_db.insert_lead(make_lead(phone_normalized="0912345678", source="fb_selenium_post"))
+        tmp_db.insert_lead(make_lead(phone_normalized="0912345678", source="fb_playwright_post"))
         stats = tmp_db.get_stats()
         assert stats["total"] == 2
         assert "google_maps" in stats["by_source"]

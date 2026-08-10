@@ -3,7 +3,7 @@ collectors/facebook.py — Thu thập SĐT từ Facebook public pages.
 
 Hai chế độ:
   1. Graph API — dùng khi có Access Token (page do mình quản lý)
-  2. Selenium public — duyệt không cần đăng nhập (public pages)
+  2. Playwright public — duyệt bằng Playwright không cần đăng nhập (public pages)
 
 Tuân thủ:
   - Không bypass CAPTCHA, login, hay cơ chế bảo vệ.
@@ -15,7 +15,7 @@ import logging
 import random
 import time
 from dataclasses import dataclass, field
-from typing import List, Optional, Callable
+from typing import List, Optional, Callable, Any
 from urllib.parse import urlparse
 import requests
 
@@ -28,9 +28,25 @@ logger = logging.getLogger(__name__)
 # Source identifiers
 SRC_GRAPH_POST = "fb_graph_post"
 SRC_GRAPH_COMMENT = "fb_graph_comment"
-SRC_SELENIUM_ABOUT = "fb_selenium_about"
-SRC_SELENIUM_POST = "fb_selenium_post"
-SRC_SELENIUM_COMMENT = "fb_selenium_comment"
+SRC_PLAYWRIGHT_ABOUT = "fb_playwright_about"
+SRC_PLAYWRIGHT_POST = "fb_playwright_post"
+SRC_PLAYWRIGHT_COMMENT = "fb_playwright_comment"
+SRC_PLAYWRIGHT_LIKER = "fb_playwright_liker"
+SRC_GROUP_POST = "fb_group_post"
+SRC_GROUP_COMMENT = "fb_group_comment"
+SRC_GROUP_LIKER = "fb_group_liker"
+SRC_SEARCH_POST = "fb_search_post"
+SRC_SEARCH_COMMENT = "fb_search_comment"
+SRC_SEARCH_LIKER = "fb_search_liker"
+SRC_PROFILE_BIO = "fb_profile_bio"
+SRC_PROFILE_POST = "fb_profile_post"
+SRC_PROFILE_COMMENT = "fb_profile_comment"
+SRC_PROFILE_LIKER = "fb_profile_liker"
+
+# Backward compatibility aliases
+SRC_SELENIUM_ABOUT = SRC_PLAYWRIGHT_ABOUT
+SRC_SELENIUM_POST = SRC_PLAYWRIGHT_POST
+SRC_SELENIUM_COMMENT = SRC_PLAYWRIGHT_COMMENT
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +80,7 @@ class FbCollectionResult:
 
 
 # ---------------------------------------------------------------------------
-# FacebookCollector
+# FacebookCollector — dùng Playwright
 # ---------------------------------------------------------------------------
 
 class FacebookCollector:
@@ -72,7 +88,6 @@ class FacebookCollector:
     Thu thập SĐT từ Facebook page (public data only).
 
     Sử dụng:
-        # Chế độ tự động (Graph API nếu có token, else Selenium)
         collector = FacebookCollector()
         result = collector.collect(
             page_url="https://www.facebook.com/tenpage",
@@ -89,13 +104,16 @@ class FacebookCollector:
         headless: Optional[bool] = None,
         progress_callback: Optional[Callable[[str], None]] = None,
     ):
-        self.headless = headless if headless is not None else settings.SELENIUM_HEADLESS
+        self.headless = headless if headless is not None else settings.PLAYWRIGHT_HEADLESS
         self.progress_callback = progress_callback
-        self._driver = None
+        self._playwright: Optional[Any] = None
+        self._browser: Optional[Any] = None
+        self._page: Optional[Any] = None
         self._extractor = PhoneExtractor()
         self._normalizer = PhoneNormalizer()
 
     def __enter__(self):
+        self._ensure_browser()
         return self
 
     def __exit__(self, *args):
@@ -105,16 +123,18 @@ class FacebookCollector:
 
     def collect(
         self,
-        page_url: str,
+        target: str,
+        target_type: str = "auto",
         sources: Optional[List[str]] = None,
         max_posts: int = 30,
     ) -> FbCollectionResult:
         """
-        Thu thập SĐT từ một Facebook page.
+        Thu thập SĐT từ Facebook Page, Profile cá nhân, Group, hoặc Từ khóa tìm kiếm.
 
         Args:
-            page_url: URL hoặc username của page (VD: "https://facebook.com/page")
-            sources: Danh sách nguồn cần thu thập: ["about", "posts", "comments"]
+            target: URL Facebook Page/Profile/Group hoặc Từ khóa cần tìm kiếm.
+            target_type: Loại mục tiêu: "page", "profile", "group", "search", hoặc "auto".
+            sources: Danh sách nguồn cần thu thập: ["about", "posts", "comments", "likers"]
                      None = thu thập tất cả.
             max_posts: Số lượng posts tối đa cần duyệt.
 
@@ -122,36 +142,66 @@ class FacebookCollector:
             FbCollectionResult.
         """
         if sources is None:
-            sources = ["about", "posts", "comments"]
+            sources = ["about", "posts", "comments", "likers"]
 
-        page_url = self._normalize_url(page_url)
-        result = FbCollectionResult(page_url=page_url)
+        target = target.strip()
 
-        logger.info("Bắt đầu thu thập Facebook: %s | Sources: %s", page_url, sources)
+        # Tự động xác định target_type nếu là "auto"
+        if target_type == "auto":
+            if "/groups/" in target:
+                target_type = "group"
+            elif "/profile.php" in target or "/p/" in target or "facebook.com/people/" in target:
+                target_type = "profile"
+            elif target.startswith("http://") or target.startswith("https://") or "facebook.com" in target:
+                target_type = "page"
+            else:
+                target_type = "search"
 
-        # Chọn chế độ
-        if settings.facebook_graph_enabled:
+        if target_type in ["page", "profile", "group"]:
+            target_url = self._normalize_url(target)
+        else:
+            target_url = target  # Keyword
+
+        result = FbCollectionResult(page_url=target_url)
+
+        logger.info("Bắt đầu thu thập Facebook [%s]: %s | Sources: %s", target_type, target_url, sources)
+
+        # Chọn chế độ: Graph API (chỉ dùng cho Page) hoặc Playwright
+        if target_type == "page" and settings.facebook_graph_enabled:
             logger.info("Dùng Graph API (có Access Token).")
-            page_id = self._extract_page_id(page_url)
+            page_id = self._extract_page_id(target_url)
             graph_results = self._collect_graph_api(page_id, sources, max_posts)
             result.results.extend(graph_results)
         else:
-            logger.info("Dùng Selenium public (không có Access Token).")
-            selenium_results = self._collect_selenium(page_url, sources, max_posts, result)
-            result.results.extend(selenium_results)
+            logger.info("Dùng Playwright (target_type=%s, logged_in=%s).", target_type, settings.is_fb_logged_in)
+            playwright_results = self._collect_playwright_target(target_url, target_type, sources, max_posts, result)
+            result.results.extend(playwright_results)
 
         result.total_found = len(result.results)
-        logger.info("Hoàn thành Facebook: %d SĐT tìm được.", result.total_found)
+        logger.info("Hoàn thành Facebook [%s]: %d SĐT tìm được.", target_type, result.total_found)
         return result
 
     def close(self):
-        """Đóng WebDriver nếu đang mở."""
-        if self._driver:
-            try:
-                self._driver.quit()
-            except Exception:
-                pass
-            self._driver = None
+        """Đóng Playwright browser nếu đang mở."""
+        try:
+            if self._page:
+                self._page.close()
+        except Exception:
+            pass
+        try:
+            if self._browser:
+                self._browser.close()
+        except Exception:
+            pass
+        try:
+            if self._playwright:
+                self._playwright.stop()
+        except Exception:
+            pass
+        self._page = None
+        self._browser = None
+        self._playwright = None
+        logger.debug("Đã đóng Playwright browser Facebook.")
 
     # ── Graph API ───────────────────────────────────────────────────────────
 
@@ -167,7 +217,6 @@ class FacebookCollector:
         base_url = "https://graph.facebook.com/v18.0"
 
         try:
-            # Lấy thông tin page
             page_info = requests.get(
                 f"{base_url}/{page_id}",
                 params={"fields": "name,phone", "access_token": token},
@@ -175,7 +224,6 @@ class FacebookCollector:
             ).json()
             page_name = page_info.get("name", "")
 
-            # SĐT khai báo trên page
             if page_phone := page_info.get("phone"):
                 r = self._process_phone(
                     page_phone, SRC_GRAPH_POST,
@@ -186,7 +234,6 @@ class FacebookCollector:
                 if r:
                     results.append(r)
 
-            # Posts
             if "posts" in sources or "comments" in sources:
                 posts_data = requests.get(
                     f"{base_url}/{page_id}/posts",
@@ -228,7 +275,6 @@ class FacebookCollector:
         self, post_id: str, token: str, base_url: str, page_name: str, post_url: str
     ) -> List[FbPhoneResult]:
         """Lấy comments của một post qua Graph API."""
-        import requests
         results = []
         try:
             data = requests.get(
@@ -253,78 +299,137 @@ class FacebookCollector:
             logger.warning("Lỗi fetch comments: %s", e)
         return results
 
-    # ── Selenium Public ─────────────────────────────────────────────────────
+    # ── Playwright Scraping (Page, Group, Search) ───────────────────────────
 
-    def _collect_selenium(
+    def _collect_playwright_target(
         self,
-        page_url: str,
+        target: str,
+        target_type: str,
         sources: List[str],
         max_posts: int,
         result: FbCollectionResult,
     ) -> List[FbPhoneResult]:
         """
-        Thu thập bằng Selenium không đăng nhập.
-        Chỉ đọc nội dung public hiển thị khi chưa login.
+        Thu thập bằng Playwright (hỗ trợ Page, Profile cá nhân, Group, và Keyword Search).
         """
         results: List[FbPhoneResult] = []
 
         try:
-            self._ensure_driver()
+            self._ensure_browser()
 
-            # Lấy About section
-            if "about" in sources:
-                if self.progress_callback:
-                    self.progress_callback("Đang đọc phần Giới thiệu...")
-                about_results = self._scrape_about(page_url, result)
-                results.extend(about_results)
+            if target_type == "profile":
+                if "about" in sources or "bio" in sources:
+                    if self.progress_callback:
+                        self.progress_callback("Đang đọc Bio & Giới thiệu Profile cá nhân...")
+                    about_results = self._scrape_about(target, result, is_profile=True)
+                    results.extend(about_results)
 
-            # Lấy Posts & Comments
-            if "posts" in sources or "comments" in sources:
+                if any(s in sources for s in ["posts", "comments", "likers"]):
+                    if self.progress_callback:
+                        self.progress_callback("Đang đọc bài viết & tương tác Profile cá nhân...")
+                    post_results = self._scrape_feed_units(
+                        target, sources, max_posts, result,
+                        src_post=SRC_PROFILE_POST, src_comment=SRC_PROFILE_COMMENT, src_liker=SRC_PROFILE_LIKER
+                    )
+                    results.extend(post_results)
+
+            elif target_type == "page":
+                if "about" in sources:
+                    if self.progress_callback:
+                        self.progress_callback("Đang đọc phần Giới thiệu Page...")
+                    about_results = self._scrape_about(target, result, is_profile=False)
+                    results.extend(about_results)
+
+                if any(s in sources for s in ["posts", "comments", "likers"]):
+                    if self.progress_callback:
+                        self.progress_callback("Đang đọc bài viết Page...")
+                    post_results = self._scrape_feed_units(
+                        target, sources, max_posts, result,
+                        src_post=SRC_PLAYWRIGHT_POST, src_comment=SRC_PLAYWRIGHT_COMMENT, src_liker=SRC_PLAYWRIGHT_LIKER
+                    )
+                    results.extend(post_results)
+
+            elif target_type == "group":
                 if self.progress_callback:
-                    self.progress_callback("Đang đọc posts...")
-                post_results = self._scrape_posts(
-                    page_url, sources, max_posts, result
+                    self.progress_callback("Đang đọc bài viết trong Hội Nhóm...")
+                group_results = self._scrape_feed_units(
+                    target, sources, max_posts, result,
+                    src_post=SRC_GROUP_POST, src_comment=SRC_GROUP_COMMENT, src_liker=SRC_GROUP_LIKER
                 )
-                results.extend(post_results)
+                results.extend(group_results)
+
+            elif target_type == "search":
+                import urllib.parse
+                search_url = f"https://www.facebook.com/search/posts/?q={urllib.parse.quote(target)}"
+                if self.progress_callback:
+                    self.progress_callback(f"Đang tìm kiếm bài viết với từ khóa '{target}'...")
+                search_results = self._scrape_feed_units(
+                    search_url, sources, max_posts, result,
+                    src_post=SRC_SEARCH_POST, src_comment=SRC_SEARCH_COMMENT, src_liker=SRC_SEARCH_LIKER
+                )
+                results.extend(search_results)
 
         except Exception as e:
-            err_msg = f"Lỗi Selenium Facebook: {e}"
+            err_msg = f"Lỗi Playwright Facebook ({target_type}): {e}"
             logger.error(err_msg, exc_info=True)
             result.errors.append(err_msg)
 
         return results
 
-    def _scrape_about(self, page_url: str, result: FbCollectionResult) -> List[FbPhoneResult]:
-        """Scrape phần About/Giới thiệu công khai của page."""
+    # Alias cho backward compatibility
+    _collect_playwright = lambda self, page_url, sources, max_posts, result: self._collect_playwright_target(page_url, "page", sources, max_posts, result)
+    _collect_selenium = _collect_playwright
+
+    def _scrape_about(self, target_url: str, result: FbCollectionResult, is_profile: bool = False) -> List[FbPhoneResult]:
+        """Scrape phần About/Giới thiệu và Bio phần đầu trang của page hoặc profile cá nhân."""
         results = []
-        if not self._driver:
+        if not self._page:
             return results
-        about_url = page_url.rstrip("/") + "/about"
 
+        source_tag = SRC_PROFILE_BIO if is_profile else SRC_PLAYWRIGHT_ABOUT
+
+        # 1. Thu thập từ trang chủ của Profile/Page (Bio header box)
         try:
-            self._driver.get(about_url)
+            self._page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
             self._human_delay(3.0, 5.0)
+            self._dismiss_popups()
 
-            # Lấy toàn bộ text của trang
-            body_text = self._driver.find_element(
-                "tag name", "body"
-            ).text
-
-            # Lấy tên page (thử nhiều cách)
+            header_text = self._page.inner_text("body")
             page_name = self._get_page_name()
-            result.page_name = page_name
+            if not result.page_name:
+                result.page_name = page_name
 
-            # Trích xuất SĐT
+            extraction = self._extractor.extract(header_text)
+            for match in extraction.matches:
+                r = self._process_phone(
+                    match.raw, source_tag, target_url,
+                    match.context, page_name,
+                )
+                if r:
+                    results.append(r)
+        except Exception as e:
+            logger.warning("Lỗi scrape trang chủ Bio/Header: %s", e)
+
+        # 2. Thu thập từ trang /about
+        about_url = target_url.rstrip("/") + "/about"
+        try:
+            self._page.goto(about_url, wait_until="domcontentloaded", timeout=30000)
+            self._human_delay(3.0, 5.0)
+            self._dismiss_popups()
+
+            body_text = self._page.inner_text("body")
+            page_name = result.page_name or self._get_page_name()
+
             extraction = self._extractor.extract(body_text)
             for match in extraction.matches:
                 r = self._process_phone(
-                    match.raw, SRC_SELENIUM_ABOUT, about_url,
+                    match.raw, source_tag, about_url,
                     match.context, page_name,
                 )
                 if r:
                     results.append(r)
 
-            logger.debug("About section: tìm %d SĐT", len(results))
+            logger.debug("About/Bio section: tìm %d SĐT", len(results))
 
         except Exception as e:
             logger.warning("Lỗi scrape About: %s", e)
@@ -332,160 +437,245 @@ class FacebookCollector:
 
         return results
 
-    def _scrape_posts(
+    def _scrape_feed_units(
         self,
-        page_url: str,
+        url: str,
         sources: List[str],
         max_posts: int,
         result: FbCollectionResult,
+        src_post: str = SRC_PLAYWRIGHT_POST,
+        src_comment: str = SRC_PLAYWRIGHT_COMMENT,
+        src_liker: str = SRC_PLAYWRIGHT_LIKER,
     ) -> List[FbPhoneResult]:
-        """Scrape posts công khai của page."""
+        """Scrape bài viết, bình luận & lượt thích từ Page, Profile, Group hoặc Kết quả Tìm kiếm."""
         results = []
-        if not self._driver:
+        if not self._page:
             return results
 
         try:
-            self._driver.get(page_url)
+            self._page.goto(url, wait_until="domcontentloaded", timeout=30000)
             self._human_delay(3.0, 5.0)
+            self._dismiss_popups()
 
             page_name = result.page_name or self._get_page_name()
+            if not result.page_name:
+                result.page_name = page_name
+
             posts_processed = 0
             last_height = 0
+            empty_scroll_count = 0
 
             while posts_processed < max_posts:
-                # Tìm tất cả posts hiện tại trên màn hình
-                posts = self._driver.find_elements(
-                    "css selector", '[data-pagelet^="FeedUnit"]'
-                )
-
+                posts = self._page.query_selector_all('[data-pagelet^="FeedUnit"]')
                 if not posts:
-                    # Fallback selector
-                    posts = self._driver.find_elements(
-                        "css selector", "div[role='article']"
-                    )
+                    posts = self._page.query_selector_all("div[role='article']")
+                if not posts:
+                    posts = self._page.query_selector_all("div[role='feed'] > div")
 
                 for post in posts[posts_processed:]:
                     if posts_processed >= max_posts:
                         break
 
                     try:
-                        post_text = post.text
-                        post_url = self._get_post_url(post) or page_url
+                        # Mở rộng văn bản bị rút gọn "Xem thêm"
+                        try:
+                            see_more = post.query_selector('div[role="button"]:has-text("Xem thêm"), div[role="button"]:has-text("See more")')
+                            if see_more and see_more.is_visible():
+                                see_more.click()
+                                self._human_delay(0.3, 0.7)
+                        except Exception:
+                            pass
 
-                        # SĐT trong post content
+                        post_text = post.inner_text() or ""
+                        if not post_text.strip():
+                            posts_processed += 1
+                            continue
+
+                        post_url = self._get_post_url(post) or url
+
                         if "posts" in sources:
                             extraction = self._extractor.extract(post_text)
                             for match in extraction.matches:
                                 r = self._process_phone(
-                                    match.raw, SRC_SELENIUM_POST, post_url,
+                                    match.raw, src_post, post_url,
                                     match.context, page_name,
                                 )
                                 if r:
                                     results.append(r)
 
-                        # SĐT trong comments (chỉ comments đã hiển thị sẵn)
                         if "comments" in sources:
-                            comment_els = post.find_elements(
-                                "css selector", 'div[aria-label*="Bình luận"] span, '
-                                               'ul li div[dir="auto"]'
+                            # Mở rộng bình luận "Xem thêm bình luận" nếu có
+                            try:
+                                more_comments = post.query_selector('div[role="button"]:has-text("Xem thêm bình luận"), div[role="button"]:has-text("Xem tất cả bình luận")')
+                                if more_comments and more_comments.is_visible():
+                                    more_comments.click()
+                                    self._human_delay(0.5, 1.0)
+                            except Exception:
+                                pass
+
+                            comment_els = post.query_selector_all(
+                                'div[aria-label*="Bình luận"] span, ul li div[dir="auto"], div[role="article"] span'
                             )
-                            for comment_el in comment_els[:20]:  # Tối đa 20 comment
-                                comment_text = comment_el.text
-                                if not comment_text:
+                            for comment_el in comment_els[:20]:
+                                comment_text = comment_el.inner_text() or ""
+                                if not comment_text.strip():
                                     continue
                                 extraction = self._extractor.extract(comment_text)
                                 for match in extraction.matches:
                                     r = self._process_phone(
-                                        match.raw, SRC_SELENIUM_COMMENT, post_url,
+                                        match.raw, src_comment, post_url,
                                         match.context, page_name,
                                     )
                                     if r:
                                         results.append(r)
 
+                        if "likers" in sources:
+                            try:
+                                reaction_btn = post.query_selector('[aria-label*="cảm xúc"], [aria-label*="reactions"], a[href*="reaction/profile"], [role="button"]:has-text("thích"), span:has-text("người khác")')
+                                if reaction_btn and reaction_btn.is_visible():
+                                    reaction_btn.click()
+                                    self._human_delay(1.0, 2.0)
+                                    dialog = self._page.query_selector('div[role="dialog"]')
+                                    if dialog:
+                                        dialog_text = dialog.inner_text() or ""
+                                        extraction = self._extractor.extract(dialog_text)
+                                        for match in extraction.matches:
+                                            r = self._process_phone(
+                                                match.raw, src_liker, post_url,
+                                                match.context, page_name,
+                                            )
+                                            if r:
+                                                results.append(r)
+                                    self._dismiss_popups()
+                            except Exception as e_likers:
+                                logger.debug("Lỗi đọc danh sách lượt thích: %s", e_likers)
+
                         posts_processed += 1
 
                     except Exception as e:
-                        logger.debug("Lỗi xử lý post: %s", e)
+                        logger.debug("Lỗi xử lý element bài viết: %s", e)
                         posts_processed += 1
                         continue
 
-                # Scroll xuống để load thêm posts
-                new_height = self._driver.execute_script(
-                    "return document.body.scrollHeight"
-                )
+                new_height = self._page.evaluate("document.body.scrollHeight")
                 if new_height == last_height:
-                    logger.info("Đã scroll đến cuối trang Facebook.")
-                    break
+                    empty_scroll_count += 1
+                    if empty_scroll_count >= 3:
+                        logger.info("Đã scroll hết kết quả Facebook.")
+                        break
+                else:
+                    empty_scroll_count = 0
+
                 last_height = new_height
-                self._driver.execute_script(
-                    "window.scrollTo(0, document.body.scrollHeight);"
-                )
+                self._page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 self._human_delay(2.0, 4.0)
+                self._dismiss_popups()
 
         except Exception as e:
-            logger.warning("Lỗi scrape Posts: %s", e)
-            result.errors.append(f"Lỗi Posts: {e}")
+            logger.warning("Lỗi scrape feed units: %s", e)
+            result.errors.append(f"Lỗi Feed Units: {e}")
 
         return results
 
+    # Alias cũ
+    _scrape_posts = _scrape_feed_units
+
+    def _dismiss_popups(self):
+        """Đóng các dialog popup đăng nhập/thông báo của Facebook nếu có."""
+        if not self._page:
+            return
+        try:
+            close_btns = self._page.query_selector_all('[aria-label="Đóng"], [aria-label="Close"], div[role="dialog"] i')
+            for btn in close_btns[:2]:
+                if btn.is_visible():
+                    btn.click()
+                    self._human_delay(0.5, 1.0)
+        except Exception:
+            pass
+
     # ── Private helpers ────────────────────────────────────────────────────
 
-    def _ensure_driver(self):
-        """Khởi tạo WebDriver."""
-        if self._driver:
+    def _ensure_browser(self):
+        """Khởi tạo Playwright browser (tự nạp session đăng nhập nếu có)."""
+        if self._browser and self._page:
             return
 
-        try:
-            import undetected_chromedriver as uc
-            options = uc.ChromeOptions()
-            if self.headless:
-                options.add_argument("--headless=new")
-            options.add_argument("--no-sandbox")
-            options.add_argument("--lang=vi-VN")
-            options.add_argument("--window-size=1366,768")
-            # Không đăng nhập — chạy profile trắng
-            self._driver = uc.Chrome(options=options)
-        except ImportError:
-            from selenium import webdriver
-            from selenium.webdriver.chrome.options import Options
-            from selenium.webdriver.chrome.service import Service
-            from webdriver_manager.chrome import ChromeDriverManager
+        from playwright.sync_api import sync_playwright
 
-            options = Options()
-            if self.headless:
-                options.add_argument("--headless=new")
-            options.add_argument("--no-sandbox")
-            options.add_argument("--lang=vi-VN")
-            service = Service(ChromeDriverManager().install())
-            self._driver = webdriver.Chrome(service=service, options=options)
+        logger.info("Đang khởi động Playwright Chromium cho Facebook (headless=%s)...", self.headless)
+        self._playwright = sync_playwright().start()
+
+        self._browser = self._playwright.chromium.launch(
+            headless=self.headless,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+                "--lang=vi-VN,vi",
+            ],
+        )
+
+        if not self._browser:
+            raise RuntimeError("Không thể khởi tạo Chromium browser.")
+
+        context_kwargs = {
+            "viewport": {"width": 1366, "height": 768},
+            "locale": "vi-VN",
+            "timezone_id": "Asia/Ho_Chi_Minh",
+            "user_agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/125.0.0.0 Safari/537.36"
+            ),
+        }
+
+        if settings.is_fb_logged_in:
+            logger.info("Đã tìm thấy session đăng nhập Facebook: %s", settings.FB_AUTH_PATH)
+            context_kwargs["storage_state"] = str(settings.FB_AUTH_PATH)
+        else:
+            logger.info("Chạy Facebook ở chế độ Ẩn danh (chưa đăng nhập).")
+
+        context = self._browser.new_context(**context_kwargs)
+
+        context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['vi-VN', 'vi', 'en-US'] });
+            window.chrome = { runtime: {} };
+        """)
+
+        self._page = context.new_page()
+        logger.info("Đã khởi động Playwright Chromium cho Facebook thành công.")
 
     def _get_page_name(self) -> str:
         """Lấy tên page từ title hoặc h1."""
-        if not self._driver:
+        if not self._page:
             return ""
         try:
-            # Thử lấy từ h1
-            h1 = self._driver.find_element("css selector", "h1")
-            return h1.text.strip()
+            h1 = self._page.query_selector("h1")
+            if h1:
+                text = (h1.inner_text() or "").strip()
+                if text:
+                    return text
         except Exception:
             pass
         try:
-            title = self._driver.title
+            title = self._page.title()
             return title.replace("| Facebook", "").strip()
         except Exception:
             return ""
 
     def _get_post_url(self, post_element) -> Optional[str]:
         """Lấy URL của post từ element."""
-        if not self._driver:
+        if not self._page:
             return None
         try:
-            link = post_element.find_element(
-                "css selector", 'a[href*="/posts/"], a[href*="story_fbid"]'
-            )
-            return link.get_attribute("href")
+            link = post_element.query_selector('a[href*="/posts/"], a[href*="story_fbid"]')
+            if link:
+                return link.get_attribute("href")
         except Exception:
-            return None
+            pass
+        return None
 
     def _process_phone(
         self,
@@ -512,8 +702,8 @@ class FacebookCollector:
 
     def _human_delay(self, lo: Optional[float] = None, hi: Optional[float] = None):
         """Nghỉ ngẫu nhiên."""
-        lo = lo if lo is not None else settings.SELENIUM_DELAY_MIN
-        hi = hi if hi is not None else settings.SELENIUM_DELAY_MAX
+        lo = lo if lo is not None else settings.PLAYWRIGHT_DELAY_MIN
+        hi = hi if hi is not None else settings.PLAYWRIGHT_DELAY_MAX
         time.sleep(random.uniform(lo, hi))
 
     @staticmethod

@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Đăng nhập — Lead Phone Collector</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    body.login-body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(circle at 10% 20%, rgba(26, 115, 232, 0.08) 0%, rgba(248, 250, 252, 1) 90%);
+      font-family: 'Inter', sans-serif;
+      margin: 0;
+      padding: 20px;
+    }
+    .login-card {
+      width: 100%;
+      max-width: 440px;
+      background: #FFFFFF;
+      border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.05);
+      border: 1px solid rgba(226, 232, 240, 0.8);
+      overflow: hidden;
+    }
+    .login-header {
+      padding: 32px 32px 24px;
+      text-align: center;
+      background: linear-gradient(180deg, #F8FAFC 0%, #FFFFFF 100%);
+      border-bottom: 1px solid #EDF2F7;
+    }
+    .login-brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 22px;
+      font-weight: 700;
+      color: #1E293B;
+      margin-bottom: 8px;
+    }
+    .login-brand span.icon {
+      font-size: 28px;
+    }
+    .login-subtitle {
+      font-size: 13px;
+      color: #64748B;
+      margin: 0;
+    }
+    .login-body-content {
+      padding: 28px 32px 32px;
+    }
+    .login-btn-social {
+      width: 100%;
+      padding: 12px 16px;
+      border-radius: 10px;
+      font-weight: 600;
+      font-size: 14px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      border: 1px solid transparent;
+      text-decoration: none;
+      margin-bottom: 12px;
+    }
+    .btn-fb {
+      background: #1877F2;
+      color: #FFFFFF;
+    }
+    .btn-fb:hover {
+      background: #166FE5;
+      box-shadow: 0 4px 12px rgba(24, 119, 242, 0.25);
+    }
+    .btn-google {
+      background: #FFFFFF;
+      color: #334155;
+      border-color: #E2E8F0;
+    }
+    .btn-google:hover {
+      background: #F8FAFC;
+      border-color: #CBD5E1;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+    }
+    .login-divider {
+      display: flex;
+      align-items: center;
+      text-align: center;
+      margin: 20px 0;
+      color: #94A3B8;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .login-divider::before, .login-divider::after {
+      content: '';
+      flex: 1;
+      border-bottom: 1px solid #E2E8F0;
+    }
+    .login-divider span {
+      padding: 0 12px;
+    }
+    .login-form .form-group {
+      margin-bottom: 16px;
+    }
+    .login-form .form-label {
+      font-size: 13px;
+      font-weight: 500;
+      color: #334155;
+      margin-bottom: 6px;
+      display: block;
+    }
+    .login-form .form-input {
+      width: 100%;
+      padding: 10px 14px;
+      border-radius: 8px;
+      border: 1px solid #CBD5E1;
+      font-size: 14px;
+      outline: none;
+      box-sizing: border-box;
+      transition: border-color 0.2s ease;
+    }
+    .login-form .form-input:focus {
+      border-color: #1A73E8;
+      box-shadow: 0 0 0 3px rgba(26, 115, 232, 0.12);
+    }
+    .btn-submit-login {
+      width: 100%;
+      padding: 12px;
+      border-radius: 10px;
+      background: #1A73E8;
+      color: #FFFFFF;
+      font-size: 14px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      transition: background 0.2s ease;
+      margin-top: 8px;
+    }
+    .btn-submit-login:hover {
+      background: #1557B0;
+      box-shadow: 0 4px 12px rgba(26, 115, 232, 0.25);
+    }
+  </style>
+</head>
+<body class="login-body">
+  <div class="login-card">
+    <div class="login-header">
+      <div class="login-brand">
+        <span class="icon">📱</span>
+        <span>Lead Collector</span>
+      </div>
+      <p class="login-subtitle">Đăng nhập để bắt đầu thu thập số điện thoại khách hàng</p>
+    </div>
+
+    <div class="login-body-content">
+      <!-- Flash Messages -->
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          {% for category, message in messages %}
+            <div class="flash flash--{{ category }}" style="margin-bottom: 16px;">
+              <span>{{ message }}</span>
+            </div>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
+
+      <!-- Quick Auth Services -->
+      <form method="POST" action="{{ url_for('login_social', provider='facebook') }}">
+        <button type="submit" class="login-btn-social btn-fb">
+          <span>📘</span> Đăng nhập bằng Facebook
+        </button>
+      </form>
+
+      <form method="POST" action="{{ url_for('login_social', provider='google') }}">
+        <button type="submit" class="login-btn-social btn-google">
+          <span>🌐</span> Đăng nhập bằng Google / Gmail
+        </button>
+      </form>
+
+      <div class="login-divider">
+        <span>hoặc đăng nhập bằng tên / email</span>
+      </div>
+
+      <!-- Direct Login Form -->
+      <form method="POST" action="{{ url_for('login') }}" class="login-form">
+        <div class="form-group">
+          <label class="form-label" for="user_identity">Tên hiển thị hoặc Email *</label>
+          <input type="text" id="user_identity" name="user_identity" class="form-input"
+                 placeholder="VD: Nguyễn Văn A hoặc user@gmail.com" required autofocus>
+        </div>
+
+        <button type="submit" class="btn-submit-login">
+          🚀 Vào công cụ ngay
+        </button>
+      </form>
+    </div>
+  </div>
+</body>
+</html>

@@ -2,27 +2,30 @@
 
 ## Tổng quan
 
-Module `collectors/google_maps.py` dùng **Selenium** để tự động duyệt Google Maps, tìm kiếm doanh nghiệp theo từ khóa và khu vực, rồi trích xuất thông tin liên lạc.
+Module `collectors/google_maps.py` dựa trên **Playwright Chromium** để tự động điều khiển trình duyệt, duyệt qua các trang kết quả Google Maps theo từ khóa và khu vực (hoặc tọa độ), rồi trích xuất đầy đủ thông tin doanh nghiệp & số điện thoại.
 
 ## Cơ chế hoạt động
 
 ```
 Input: keyword + area
-       │
-       ▼
-Mở Google Maps → Nhập query → Đợi kết quả
-       │
-       ▼
-Scroll danh sách kết quả (lazy load)
-       │
-       ▼
-Click từng business card
-       │
-       ▼
-Lấy: name, phone, address, website, maps_url, rating
-       │
-       ▼
-Phone Extractor → Normalizer → DB
+ │
+ ▼
+Mở Google Maps → Gửi query ("keyword + area") → Chờ trang hiển thị
+ │
+ ▼
+Cuộn danh sách kết quả (Lazy Load scroll container: div[role="feed"])
+ │
+ ▼
+Click lần lượt vào từng Business Card
+ │
+ ▼
+Trích xuất chi tiết: Name, Phone (raw), Address, Website, Rating, Reviews, Maps URL
+ │
+ ▼
+Trích xuất SĐT (Phone Extractor) → Chuẩn hóa & Nhận diện nhà mạng (Normalizer)
+ │
+ ▼
+Lưu vào SQLite DB (Deduplication) → Auto-sync Google Sheets
 ```
 
 ## Cách dùng
@@ -30,13 +33,14 @@ Phone Extractor → Normalizer → DB
 ### Qua CLI
 
 ```bash
-# Cơ bản
+# Thu thập mặc định (Headless)
 python main.py maps --keyword "quán cà phê" --area "Hà Nội"
 
-# Với giới hạn số lượng
-python main.py maps --keyword "nhà hàng" --area "Đà Nẵng" --limit 100
+# Thu thập kèm giới hạn & Hiển thị trình duyệt trực quan
+python main.py maps --keyword "nhà hàng" --area "Đà Nẵng" --limit 50 --show-browser
 
-# Kết quả tự động lưu DB + sync Sheets
+# Thu thập và tự động xuất file Excel khi hoàn thành
+python main.py maps --keyword "khách sạn" --area "Nha Trang" --limit 30 --export excel
 ```
 
 ### Qua Python API
@@ -44,42 +48,49 @@ python main.py maps --keyword "nhà hàng" --area "Đà Nẵng" --limit 100
 ```python
 from collectors.google_maps import GoogleMapsCollector
 
-collector = GoogleMapsCollector()
-results = collector.search(
-    keyword="spa",
-    area="TP Hồ Chí Minh",
-    limit=50
-)
-# results: List[dict] với các key: name, phone, address, website, maps_url
+def on_progress(current, total):
+ print(f"Progress: {current}/{total}")
+
+with GoogleMapsCollector(headless=True, progress_callback=on_progress) as collector:
+ result = collector.search(
+ keyword="spa",
+ area="TP Hồ Chí Minh",
+ limit=50
+ )
+
+print(f"Tìm được {result.total_with_phone} SĐT từ {result.total_scraped} địa điểm.")
+for biz in result.businesses:
+ print(biz.name, biz.phone_normalized, biz.carrier)
 ```
 
 ## Dữ liệu thu thập
 
-| Trường | Mô tả | Ví dụ |
-|--------|-------|-------|
-| `name` | Tên doanh nghiệp | "Cà phê Trung Nguyên" |
-| `phone` | Số điện thoại (raw) | "028 3822 1234" |
-| `address` | Địa chỉ đầy đủ | "25 Lê Thánh Tôn, Q1, HCM" |
-| `website` | Website (nếu có) | "trungnguyen.com.vn" |
-| `maps_url` | Link Google Maps | "https://maps.google.com/..." |
-| `rating` | Đánh giá (nếu có) | "4.3" |
-| `reviews_count` | Số đánh giá | "128" |
+| Trường | Kiểu dữ liệu | Mô tả | Ví dụ |
+|--------|--------------|-------|-------|
+| `name` | `str` | Tên doanh nghiệp / địa điểm | "Cà phê Trung Nguyên" |
+| `phone_raw` | `str` | SĐT thô chưa xử lý | "028 3822 1234" |
+| `phone_normalized`| `str` | SĐT đã chuẩn hóa 10 chữ số | "02838221234" |
+| `carrier` | `str` | Nhà mạng phát hiện | "Viettel", "VNPT / Cố định" |
+| `address` | `str` | Địa chỉ đầy đủ | "25 Lê Thánh Tôn, Bến Nghé, Quận 1, HCM" |
+| `website` | `str` | URL Website chính thức | "https://trungnguyen.com.vn" |
+| `maps_url` | `str` | Đường dẫn Google Maps của địa điểm | "https://www.google.com/maps/place/..." |
+| `rating` | `str` | Điểm đánh giá sao (1.0 - 5.0) | "4.5" |
+| `reviews_count` | `int` | Số lượng đánh giá người dùng | 250 |
 
-## Anti-block measures
+## Anti-block & Tối ưu hóa Scraping
 
-- **Random delay** giữa các request (cấu hình qua `.env`)
-- **undetected-chromedriver** để tránh bot detection
-- **Human-like scroll** trong danh sách kết quả
-- **User-Agent rotation** (tùy chọn)
+- **Random Delay**: Delay ngẫu nhiên giữa các thao tác click/scroll (cấu hình trong `.env`).
+- **Scroll Container Smart Wait**: Tự động phát hiện khi hết danh sách hoặc chạm đáy Google Maps list (`div[role="feed"]`).
+- **Element Selector Fallbacks**: Sử dụng bộ selector đa tầng linh hoạt (ARIA labels, text patterns, SVG icons) để chịu đựng sự thay đổi giao diện từ Google Maps.
+- **Context Isolation**: Chạy trên Browser Context sạch sẽ của Playwright.
 
-## Giới hạn
+## Giới hạn kỹ thuật
 
-- Google Maps thường hiển thị tối đa **~120 kết quả** cho một query
-- Để có nhiều hơn: chia nhỏ khu vực (VD: "quận 1", "quận 2" thay vì "HCM")
-- Không phải doanh nghiệp nào cũng có số điện thoại trên Maps
+- Google Maps mặc định chỉ hiển thị tối đa **~120 kết quả** trên một lượt tìm kiếm.
+- **Mẹo lấy nhiều dữ liệu hơn**: Chia nhỏ khu vực tìm kiếm (Ví dụ: thay vì cào `"quận 1 HCM"`, cào theo từng phường/đường như `"Lê Lợi Quận 1"`, `"Bến Thành Quận 1"`).
 
 ## Lưu ý pháp lý
 
-- Chỉ thu thập dữ liệu **công khai** mà Google Maps hiển thị cho mọi người
-- Không thu thập dữ liệu cá nhân, chỉ thông tin doanh nghiệp
-- Tuân thủ [Google Maps Terms of Service](https://cloud.google.com/maps-platform/terms)
+- Chỉ thu thập thông tin doanh nghiệp hiển thị **công khai** trên Google Maps.
+- Tuân thủ [Google Maps Terms of Service](https://cloud.google.com/maps-platform/terms).
+

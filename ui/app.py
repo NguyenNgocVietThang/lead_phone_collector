@@ -14,16 +14,18 @@ Routes:
 """
 
 import logging
+import re
 import threading
 from datetime import datetime
 
 from flask import (
     Flask, render_template, request, jsonify, redirect,
-    url_for, send_file, flash,
+    url_for, send_file, flash, session,
 )
 
 from config.settings import settings
 from storage.database import LeadDatabase, Lead
+from processors.source_helper import get_source_info
 from exporters.excel_export import ExcelExporter
 from exporters.csv_export import CsvExporter
 
@@ -35,11 +37,80 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = settings.FLASK_SECRET_KEY
+app.jinja_env.filters["source_info"] = get_source_info
 
 db = LeadDatabase()
 
 # Lưu trạng thái các jobs đang chạy
 _active_jobs: dict = {}  # job_id -> {"status": str, "message": str}
+
+EXEMPT_ENDPOINTS = {"login", "login_social", "logout", "static"}
+
+
+@app.before_request
+def check_authentication():
+    """Kiểm tra bắt buộc đăng nhập trước khi truy cập bất kỳ trang nào."""
+    if request.endpoint and request.endpoint not in EXEMPT_ENDPOINTS:
+        if not session.get("user_identity"):
+            return redirect(url_for("login", next=request.url))
+
+
+# ---------------------------------------------------------------------------
+# Routes — Authentication
+# ---------------------------------------------------------------------------
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    """Trang đăng nhập."""
+    if request.method == "POST":
+        identity = request.form.get("user_identity", "").strip()
+        if not identity:
+            flash("Vui lòng nhập tên hoặc email đăng nhập.", "error")
+            return render_template("login.html")
+        session["user_identity"] = identity
+        session["auth_provider"] = "direct"
+        flash(f"Đăng nhập thành công với tên: {identity}", "success")
+        next_url = request.args.get("next") or url_for("index")
+        return redirect(next_url)
+
+    if session.get("user_identity"):
+        return redirect(url_for("index"))
+    return render_template("login.html")
+
+
+@app.route("/login/social/<provider>", methods=["GET", "POST"])
+def login_social(provider: str):
+    """Đăng nhập bằng tài khoản Facebook hoặc Google đã lưu phiên hoặc mở trình duyệt tương tác."""
+    from storage.auth import AuthManager
+    provider = provider.lower().strip()
+
+    # Nếu chưa có phiên đăng nhập đã lưu, tự động mở trình duyệt tương tác để người dùng đăng nhập
+    if not AuthManager.is_logged_in(provider):
+        flash(f"Chưa có phiên làm việc {provider.upper()}. Đang mở trình duyệt để bạn đăng nhập...", "info")
+        AuthManager.launch_interactive_login(provider, timeout_seconds=120)
+
+    user_info = AuthManager.get_user_info(provider)
+    if user_info.get("logged_in"):
+        name = user_info.get("name", f"Tài khoản {provider.title()}")
+        session["user_identity"] = name
+        session["auth_provider"] = provider
+        flash(f"Đã kết nối thành công tài khoản {provider.upper()}: {name}", "success")
+    else:
+        name = f"Tài khoản {provider.title()}"
+        session["user_identity"] = name
+        session["auth_provider"] = provider
+        flash(f"Đã tạo phiên làm việc mặc định cho {provider.upper()}.", "warning")
+
+    next_url = request.args.get("next") or url_for("index")
+    return redirect(next_url)
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    """Đăng xuất tài khoản."""
+    session.clear()
+    flash("Đã đăng xuất khỏi hệ thống.", "info")
+    return redirect(url_for("login"))
 
 
 # ---------------------------------------------------------------------------
@@ -68,21 +139,22 @@ def index():
 @app.route("/collect/maps", methods=["POST"])
 def collect_maps():
     """Trigger Google Maps collection job."""
-    keyword = request.form.get("keyword", "").strip()
-    area = request.form.get("area", "").strip()
+    keyword = re.sub(r"\s+", " ", request.form.get("keyword", "")).strip()
+    area = re.sub(r"\s+", " ", request.form.get("area", "")).strip()
     limit = int(request.form.get("limit", 50))
+    collector_user = session.get("user_identity", "Admin")
 
     if not keyword:
         flash("Vui lòng nhập từ khóa tìm kiếm.", "error")
         return redirect(url_for("index"))
 
-    query = f"{keyword} {area}".strip()
-    job_id = db.create_job("google_maps", query)
+    query = re.sub(r"\s+", " ", f"{keyword} {area}").strip()
+    job_id = db.create_job("google_maps", query, collector_user=collector_user)
 
     # Chạy background thread
     thread = threading.Thread(
         target=_run_maps_job,
-        args=(job_id, keyword, area, limit),
+        args=(job_id, keyword, area, limit, collector_user),
         daemon=True,
     )
     thread.start()
@@ -93,25 +165,27 @@ def collect_maps():
 
 @app.route("/collect/facebook", methods=["POST"])
 def collect_facebook():
-    """Trigger Facebook collection job."""
-    page_url = request.form.get("page_url", "").strip()
-    sources = request.form.getlist("sources") or ["about", "posts", "comments"]
+    """Trigger Facebook collection job (Page, Profile cá nhân, Group, hoặc Từ khóa search)."""
+    target_type = request.form.get("target_type", "auto").strip()
+    target_value = request.form.get("target_value", "").strip() or request.form.get("page_url", "").strip()
+    sources = request.form.getlist("sources") or ["about", "posts", "comments", "likers"]
     max_posts = int(request.form.get("max_posts", 30))
+    collector_user = session.get("user_identity", "Admin")
 
-    if not page_url:
-        flash("Vui lòng nhập URL Facebook page.", "error")
+    if not target_value:
+        flash("Vui lòng nhập URL Facebook hoặc từ khóa tìm kiếm.", "error")
         return redirect(url_for("index"))
 
-    job_id = db.create_job("facebook", page_url)
+    job_id = db.create_job("facebook", f"[{target_type}] {target_value}", collector_user=collector_user)
 
     thread = threading.Thread(
         target=_run_facebook_job,
-        args=(job_id, page_url, sources, max_posts),
+        args=(job_id, target_value, target_type, sources, max_posts, collector_user),
         daemon=True,
     )
     thread.start()
 
-    flash(f"Đã bắt đầu thu thập Facebook: {page_url}. Job ID: {job_id}", "success")
+    flash(f"Đã bắt đầu thu thập Facebook [{target_type}]: '{target_value}'. Job ID: {job_id}", "success")
     return redirect(url_for("job_status_page", job_id=job_id))
 
 
@@ -131,31 +205,57 @@ def job_status_page(job_id: int):
 
 @app.route("/leads")
 def leads_page():
-    """Bảng danh sách leads với filter."""
+    """Bảng danh sách leads với filter và tìm kiếm linh hoạt (gần đúng / trùng 1 phần / chính xác)."""
     source = request.args.get("source", "")
     status = request.args.get("status", "")
     carrier = request.args.get("carrier", "")
+    collector_user = request.args.get("collector_user", "")
     search = request.args.get("search", "")
+    search_mode = request.args.get("search_mode", "fuzzy")
     page = int(request.args.get("page", 1))
     per_page = 50
+
+    total_leads = db.count_leads(
+        source=source or None,
+        status=status or None,
+        carrier=carrier or None,
+        collector_user=collector_user or None,
+        search=search or None,
+        search_mode=search_mode,
+    )
 
     leads = db.get_leads(
         source=source or None,
         status=status or None,
         carrier=carrier or None,
+        collector_user=collector_user or None,
         search=search or None,
+        search_mode=search_mode,
         limit=per_page,
         offset=(page - 1) * per_page,
     )
+
+    distinct_collectors = db.get_distinct_collectors()
+    total_pages = max(1, (total_leads + per_page - 1) // per_page)
 
     stats = db.get_stats()
     return render_template(
         "leads.html",
         leads=leads,
         stats=stats,
-        filters={"source": source, "status": status, "carrier": carrier, "search": search},
+        distinct_collectors=distinct_collectors,
+        filters={
+            "source": source,
+            "status": status,
+            "carrier": carrier,
+            "collector_user": collector_user,
+            "search": search,
+            "search_mode": search_mode,
+        },
         page=page,
         per_page=per_page,
+        total_leads=total_leads,
+        total_pages=total_pages,
     )
 
 
@@ -204,10 +304,22 @@ def api_stats():
 
 @app.route("/export/excel")
 def export_excel():
-    """Download Excel."""
+    """Download Excel với filter và tìm kiếm."""
     source = request.args.get("source")
     status = request.args.get("status")
-    leads = db.get_all_for_export(source=source or None, status=status or None)
+    carrier = request.args.get("carrier")
+    collector_user = request.args.get("collector_user")
+    search = request.args.get("search")
+    search_mode = request.args.get("search_mode", "fuzzy")
+
+    leads = db.get_all_for_export(
+        source=source or None,
+        status=status or None,
+        carrier=carrier or None,
+        collector_user=collector_user or None,
+        search=search or None,
+        search_mode=search_mode,
+    )
 
     if not leads:
         flash("Không có dữ liệu để xuất.", "warning")
@@ -220,10 +332,22 @@ def export_excel():
 
 @app.route("/export/csv")
 def export_csv():
-    """Download CSV."""
+    """Download CSV với filter và tìm kiếm."""
     source = request.args.get("source")
     status = request.args.get("status")
-    leads = db.get_all_for_export(source=source or None, status=status or None)
+    carrier = request.args.get("carrier")
+    collector_user = request.args.get("collector_user")
+    search = request.args.get("search")
+    search_mode = request.args.get("search_mode", "fuzzy")
+
+    leads = db.get_all_for_export(
+        source=source or None,
+        status=status or None,
+        carrier=carrier or None,
+        collector_user=collector_user or None,
+        search=search or None,
+        search_mode=search_mode,
+    )
 
     if not leads:
         flash("Không có dữ liệu để xuất.", "warning")
@@ -246,11 +370,66 @@ def settings_page():
         "google_sheet_name": settings.GOOGLE_SHEET_NAME,
         "sheets_configured": bool(settings.GOOGLE_SHEET_ID),
         "facebook_token_configured": bool(settings.FACEBOOK_ACCESS_TOKEN),
-        "selenium_headless": settings.SELENIUM_HEADLESS,
-        "delay_min": settings.SELENIUM_DELAY_MIN,
-        "delay_max": settings.SELENIUM_DELAY_MAX,
+        "is_fb_logged_in": settings.is_fb_logged_in,
+        "is_google_logged_in": settings.is_google_logged_in,
+        "playwright_headless": settings.PLAYWRIGHT_HEADLESS,
+        "selenium_headless": settings.PLAYWRIGHT_HEADLESS,
+        "delay_min": settings.PLAYWRIGHT_DELAY_MIN,
+        "delay_max": settings.PLAYWRIGHT_DELAY_MAX,
     }
     return render_template("settings.html", config=config_info)
+
+
+# ---------------------------------------------------------------------------
+# Routes — Authentication & Session Management
+# ---------------------------------------------------------------------------
+
+@app.route("/auth/login/<service>", methods=["POST"])
+def auth_login(service: str):
+    """Mở trình duyệt đăng nhập tương tác cho Facebook hoặc Google."""
+    from storage.auth import AuthManager
+
+    def run_login():
+        AuthManager.launch_interactive_login(service=service)
+
+    thread = threading.Thread(target=run_login, daemon=True)
+    thread.start()
+    flash(f"Đã mở cửa sổ trình duyệt đăng nhập {service.upper()}. Vui lòng hoàn tất đăng nhập trên màn hình!", "info")
+    return redirect(url_for("settings_page"))
+
+
+@app.route("/auth/logout/<service>", methods=["POST"])
+def auth_logout(service: str):
+    """Xóa phiên đăng nhập."""
+    from storage.auth import AuthManager
+    if AuthManager.clear_session(service):
+        flash(f"Đã xóa phiên đăng nhập {service.upper()}.", "success")
+    else:
+        flash(f"Không có phiên đăng nhập {service.upper()} nào để xóa.", "warning")
+    return redirect(url_for("settings_page"))
+
+
+@app.route("/auth/save-json/<service>", methods=["POST"])
+def auth_save_json(service: str):
+    """Lưu thủ công mảng storage_state JSON."""
+    from storage.auth import AuthManager
+    json_str = request.form.get("cookie_json", "").strip()
+    if not json_str:
+        flash("Vui lòng dán nội dung JSON phiên làm việc.", "error")
+    elif AuthManager.save_cookie_json(service, json_str):
+        flash(f"Đã lưu thành công phiên làm việc JSON cho {service.upper()}!", "success")
+    else:
+        flash("Định dạng JSON không hợp lệ.", "error")
+    return redirect(url_for("settings_page"))
+
+
+@app.route("/auth/status")
+def auth_status():
+    """Trả về JSON trạng thái đăng nhập."""
+    return jsonify({
+        "facebook": settings.is_fb_logged_in,
+        "google": settings.is_google_logged_in,
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +461,7 @@ def _run_maps_job(job_id: int, keyword: str, area: str, limit: int):
                 name=biz.name,
                 phone_raw=biz.phone_raw,
                 phone_normalized=biz.phone_normalized,
-                source="google_maps",
+                source=getattr(biz, "source", "google_maps_details") or "google_maps_details",
                 source_url=biz.maps_url,
                 content=f"Google Maps: {biz.name}",
                 address=biz.address,
@@ -315,8 +494,8 @@ def _run_maps_job(job_id: int, keyword: str, area: str, limit: int):
         threading.Timer(300, lambda: _active_jobs.pop(job_id, None)).start()
 
 
-def _run_facebook_job(job_id: int, page_url: str, sources: list, max_posts: int):
-    """Chạy Facebook collector trong background thread."""
+def _run_facebook_job(job_id: int, target: str, target_type: str, sources: list, max_posts: int, collector_user: str = ""):
+    """Chạy Facebook collector trong background thread (hỗ trợ page, group, search)."""
     from collectors.facebook import FacebookCollector
     from storage.sheets import GoogleSheetsSync
 
@@ -327,7 +506,7 @@ def _run_facebook_job(job_id: int, page_url: str, sources: list, max_posts: int)
 
     try:
         with FacebookCollector(progress_callback=on_progress) as collector:
-            result = collector.collect(page_url, sources, max_posts)
+            result = collector.collect(target=target, target_type=target_type, sources=sources, max_posts=max_posts)
 
         leads = []
         for fb_result in result.results:
@@ -339,6 +518,7 @@ def _run_facebook_job(job_id: int, page_url: str, sources: list, max_posts: int)
                 source_url=fb_result.source_url,
                 content=fb_result.content,
                 carrier=fb_result.carrier,
+                collector_user=collector_user or "",
             ))
 
         batch_result = db.insert_leads_batch(leads)

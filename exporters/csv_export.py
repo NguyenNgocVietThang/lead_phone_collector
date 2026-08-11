@@ -17,7 +17,7 @@ from processors.source_helper import format_source_label
 logger = logging.getLogger(__name__)
 
 _HEADERS = [
-    "ID", "Tên", "Số điện thoại", "Nhà mạng",
+    "ID", "Tên", "Số điện thoại",
     "Nguồn", "Người tìm kiếm", "URL nguồn", "Địa chỉ", "Website",
     "Nội dung chứa SĐT", "Trạng thái", "Ngày thu thập",
 ]
@@ -65,7 +65,6 @@ class CsvExporter:
                     lead.id or "",
                     lead.name or "",
                     lead.phone_normalized or "",
-                    lead.carrier or "",
                     format_source_label(lead.source or ""),
                     lead.collector_user or "",
                     lead.source_url or "",

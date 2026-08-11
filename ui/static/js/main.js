@@ -43,7 +43,7 @@ function formatPhone(phone) {
 // ── Copy to clipboard ─────────────────────────────────────────────────────
 function copyPhone(phone) {
   navigator.clipboard.writeText(phone)
-    .then(() => showToast(`📋 Đã copy: ${formatPhone(phone)}`))
+    .then(() => showToast(`Đã copy: ${formatPhone(phone)}`))
     .catch(() => {
       // Fallback cho trình duyệt cũ
       const el = document.createElement('textarea');
@@ -52,7 +52,7 @@ function copyPhone(phone) {
       el.select();
       document.execCommand('copy');
       document.body.removeChild(el);
-      showToast(`📋 Đã copy: ${phone}`);
+      showToast(`Đã copy: ${phone}`);
     });
 }
 
@@ -78,7 +78,7 @@ async function updateStatus(leadId, status) {
         'new': 'Mới', 'contacted': 'Đã gọi',
         'qualified': 'Tiềm năng', 'rejected': 'Loại',
       };
-      showToast(`✓ Đã cập nhật: ${labels[status] || status}`);
+      showToast(`Đã cập nhật: ${labels[status] || status}`);
     } else {
       showToast('Lỗi cập nhật', 'error');
     }

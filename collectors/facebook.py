@@ -14,6 +14,7 @@ Tuân thủ:
 import hashlib
 import logging
 import random
+import re
 import time
 from dataclasses import dataclass, field
 from typing import List, Optional, Callable, Any
@@ -43,6 +44,10 @@ SRC_PROFILE_BIO = "fb_profile_bio"
 SRC_PROFILE_POST = "fb_profile_post"
 SRC_PROFILE_COMMENT = "fb_profile_comment"
 SRC_PROFILE_LIKER = "fb_profile_liker"
+SRC_NAME_SEARCH_BIO = "fb_namesearch_bio"
+SRC_NAME_SEARCH_POST = "fb_namesearch_post"
+SRC_NAME_SEARCH_COMMENT = "fb_namesearch_comment"
+SRC_NAME_SEARCH_LIKER = "fb_namesearch_liker"
 
 ALLOWED_SOURCES = {"about", "bio", "posts", "comments", "likers"}
 DEFAULT_SOURCES = ["about", "posts", "comments", "likers"]
@@ -136,16 +141,23 @@ class FacebookCollector:
         target_type: str = "auto",
         sources: Optional[List[str]] = None,
         max_posts: int = 30,
+        max_profiles: int = 5,
     ) -> FbCollectionResult:
         """
-        Thu thập SĐT từ Facebook Page, Profile cá nhân, Group, hoặc Từ khóa tìm kiếm.
+        Thu thập SĐT từ Facebook Page, Profile cá nhân, Group, Từ khóa tìm kiếm,
+        hoặc Tìm kiếm theo Tên (quét lần lượt các hồ sơ/trang khớp tên).
 
         Args:
-            target: URL Facebook Page/Profile/Group hoặc Từ khóa cần tìm kiếm.
-            target_type: Loại mục tiêu: "page", "profile", "group", "search", hoặc "auto".
+            target: URL Facebook Page/Profile/Group, hoặc Tên người/trang/từ khóa cần tìm.
+            target_type: Loại mục tiêu — chỉ 2 giá trị dùng cho người dùng cuối:
+                         "link" (URL Page/Profile/Group, tự nhận diện) hoặc
+                         "name_search" (tìm theo tên/từ khóa: quét hồ sơ khớp tên
+                         + bài viết chứa từ khóa). "auto", "page", "profile",
+                         "group", "search" vẫn được hỗ trợ nội bộ/tương thích ngược.
             sources: Danh sách nguồn cần thu thập: ["about", "posts", "comments", "likers"]
                      None = thu thập tất cả.
-            max_posts: Số lượng posts tối đa cần duyệt.
+            max_posts: Số lượng posts tối đa cần duyệt (mỗi hồ sơ, với "name_search").
+            max_profiles: Số hồ sơ/trang tối đa cần quét khi target_type="name_search".
 
         Returns:
             FbCollectionResult.
@@ -156,8 +168,14 @@ class FacebookCollector:
             # Giữ đúng thứ tự người dùng chọn, bỏ giá trị lạ và giá trị trùng.
             sources = list(dict.fromkeys(s for s in sources if s in ALLOWED_SOURCES))
         max_posts = max(1, min(int(max_posts), 200))
+        max_profiles = max(1, min(int(max_profiles), 20))
 
         target = target.strip()
+
+        # UI chỉ có 2 lựa chọn cho người dùng: "link" (URL Facebook bất kỳ) hoặc
+        # "name_search" (tên/từ khóa). "link" tự nhận diện Page/Profile/Group từ URL.
+        if target_type == "link":
+            target_type = "auto"
 
         # Tự động xác định target_type nếu là "auto"
         if target_type == "auto":
@@ -168,7 +186,8 @@ class FacebookCollector:
             elif target.startswith("http://") or target.startswith("https://") or "facebook.com" in target:
                 target_type = "page"
             else:
-                target_type = "search"
+                # Không phải URL → xem như tìm theo tên/từ khóa.
+                target_type = "name_search"
 
         if target_type in ["page", "profile", "group"]:
             target_url = self._normalize_url(target)
@@ -192,11 +211,11 @@ class FacebookCollector:
                 if self.progress_callback:
                     self.progress_callback("Graph API không có dữ liệu, đang chuyển sang quét trình duyệt...")
                 result.results.extend(
-                    self._collect_playwright_target(target_url, target_type, sources, max_posts, result)
+                    self._collect_playwright_target(target_url, target_type, sources, max_posts, result, max_profiles)
                 )
         else:
             logger.info("Dùng Playwright (target_type=%s, logged_in=%s).", target_type, settings.is_fb_logged_in)
-            playwright_results = self._collect_playwright_target(target_url, target_type, sources, max_posts, result)
+            playwright_results = self._collect_playwright_target(target_url, target_type, sources, max_posts, result, max_profiles)
             result.results.extend(playwright_results)
 
         # Loại bỏ các SĐT bị trùng lặp trong cùng phiên thu thập
@@ -340,6 +359,7 @@ class FacebookCollector:
         sources: List[str],
         max_posts: int,
         result: FbCollectionResult,
+        max_profiles: int = 5,
     ) -> List[FbPhoneResult]:
         """
         Thu thập bằng Playwright (hỗ trợ Page, Profile cá nhân, Group, và Keyword Search).
@@ -401,6 +421,10 @@ class FacebookCollector:
                 )
                 results.extend(search_results)
 
+            elif target_type == "name_search":
+                name_results = self._collect_name_search(target, sources, max_posts, max_profiles, result)
+                results.extend(name_results)
+
         except Exception as e:
             err_msg = f"Lỗi Playwright Facebook ({target_type}): {e}"
             logger.error(err_msg, exc_info=True)
@@ -412,13 +436,197 @@ class FacebookCollector:
     _collect_playwright = lambda self, page_url, sources, max_posts, result: self._collect_playwright_target(page_url, "page", sources, max_posts, result)
     _collect_selenium = _collect_playwright
 
-    def _scrape_about(self, target_url: str, result: FbCollectionResult, is_profile: bool = False) -> List[FbPhoneResult]:
+    # ── Tìm kiếm theo Tên (Name Search) ─────────────────────────────────────
+
+    def _collect_name_search(
+        self,
+        name: str,
+        sources: List[str],
+        max_posts: int,
+        max_profiles: int,
+        result: FbCollectionResult,
+    ) -> List[FbPhoneResult]:
+        """
+        Chế độ "Tìm theo Tên": gộp 2 bước tìm kiếm của Facebook cho cùng một
+        tên/từ khóa nhập vào —
+          1. Tìm BÀI VIẾT chứa từ khóa (facebook.com/search/posts) — hữu ích khi
+             người dùng nhập một cụm từ khóa (VD: "sang nhượng spa quận 1") thay
+             vì tên riêng.
+          2. Tìm HỒ SƠ/TRANG khớp tên (facebook.com/search/people) rồi quét lần
+             lượt từng kết quả khớp (Bio/Giới thiệu + Bài viết + Bình luận + Lượt
+             thích), giống như quét từng Page/Profile riêng lẻ nhưng tự động hoá
+             bước tìm mục tiêu.
+        Chuỗi tìm kiếm được chuẩn hóa khoảng trắng trước khi gửi; việc tìm gần
+        đúng (bỏ dấu, sai chính tả nhẹ...) do chính công cụ tìm kiếm của Facebook
+        đảm nhiệm trên cả 2 bước.
+        """
+        import urllib.parse
+
+        results: List[FbPhoneResult] = []
+        if not self._page:
+            return results
+
+        query = self._normalize_search_query(name)
+        result.page_name = f"Tìm theo tên: {query}"
+
+        # Bước 1: Bài viết chứa từ khóa
+        if any(s in sources for s in ("posts", "comments", "likers")):
+            try:
+                if self.progress_callback:
+                    self.progress_callback(f"Đang tìm bài viết chứa từ khóa '{query}'...")
+                post_search_url = f"https://www.facebook.com/search/posts/?q={urllib.parse.quote(query)}"
+                results.extend(
+                    self._scrape_feed_units(
+                        post_search_url, sources, max_posts, result,
+                        src_post=SRC_SEARCH_POST,
+                        src_comment=SRC_SEARCH_COMMENT,
+                        src_liker=SRC_SEARCH_LIKER,
+                    )
+                )
+            except Exception as e:
+                logger.warning("Lỗi tìm bài viết theo từ khóa '%s': %s", query, e)
+                result.errors.append(f"Lỗi tìm bài viết theo từ khóa '{query}': {e}")
+
+        # Bước 2: Hồ sơ/Trang khớp tên
+        search_url = f"https://www.facebook.com/search/people/?q={urllib.parse.quote(query)}"
+
+        try:
+            if self.progress_callback:
+                self.progress_callback(f"Đang tìm hồ sơ/trang khớp tên '{query}'...")
+            self._page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+            self._human_delay(2.0, 3.5)
+            self._dismiss_popups()
+
+            profiles = self._find_profile_links(max_profiles)
+            scroll_attempts = 0
+            while len(profiles) < max_profiles and scroll_attempts < 6:
+                try:
+                    self._page.mouse.wheel(0, 1400)
+                except Exception:
+                    self._page.evaluate("window.scrollBy(0, 1400)")
+                self._human_delay(0.8, 1.5)
+                profiles = self._find_profile_links(max_profiles)
+                scroll_attempts += 1
+
+            if not profiles:
+                msg = f"Không tìm thấy hồ sơ/trang nào khớp với tên '{query}'."
+                logger.warning(msg)
+                result.errors.append(msg)
+                return results
+
+            logger.info("Tìm theo tên '%s': tìm thấy %d hồ sơ để quét.", query, len(profiles))
+
+            for idx, profile_url in enumerate(profiles, start=1):
+                if self.progress_callback:
+                    self.progress_callback(
+                        f"Đang quét hồ sơ {idx}/{len(profiles)} (tìm theo tên '{query}')..."
+                    )
+                # Dùng một FbCollectionResult riêng cho mỗi hồ sơ để `page_name`
+                # không bị rò rỉ giữa các hồ sơ khác nhau (mỗi người/trang có tên riêng).
+                profile_result = FbCollectionResult(page_url=profile_url)
+                try:
+                    if "about" in sources or "bio" in sources:
+                        results.extend(
+                            self._scrape_about(
+                                profile_url, profile_result, is_profile=True,
+                                source_tag_override=SRC_NAME_SEARCH_BIO,
+                            )
+                        )
+                    if any(s in sources for s in ("posts", "comments", "likers")):
+                        results.extend(
+                            self._scrape_feed_units(
+                                profile_url, sources, max_posts, profile_result,
+                                src_post=SRC_NAME_SEARCH_POST,
+                                src_comment=SRC_NAME_SEARCH_COMMENT,
+                                src_liker=SRC_NAME_SEARCH_LIKER,
+                            )
+                        )
+                    result.errors.extend(profile_result.errors)
+                except Exception as e_profile:
+                    logger.warning("Lỗi quét hồ sơ %s (tìm theo tên): %s", profile_url, e_profile)
+                    result.errors.append(f"Lỗi quét hồ sơ {profile_url}: {e_profile}")
+                self._human_delay()
+
+        except Exception as e:
+            err_msg = f"Lỗi tìm kiếm theo tên '{name}': {e}"
+            logger.error(err_msg, exc_info=True)
+            result.errors.append(err_msg)
+
+        return results
+
+    _PROFILE_URL_EXCLUDED_SEGMENTS = frozenset({
+        "search", "groups", "marketplace", "watch", "gaming", "policies",
+        "help", "ads", "hashtag", "login", "recover", "reel", "photo.php",
+        "story.php", "events", "jobs", "fundraisers", "business", "settings",
+        "notifications", "messages", "bookmarks", "sharer", "l.php",
+        "plugins", "dialog", "privacy", "terms", "pages", "permalink.php",
+        "media", "campaign", "ajax", "public",
+    })
+
+    @classmethod
+    def _looks_like_profile_url(cls, url: str) -> bool:
+        """Nhận diện link trông giống hồ sơ cá nhân/trang Facebook (không phải bài
+        viết, quảng cáo, hay điều hướng nội bộ khác) từ kết quả tìm kiếm theo tên."""
+        if not url:
+            return False
+        parsed = urlparse(url)
+        if "facebook.com" not in parsed.netloc.lower():
+            return False
+        path = parsed.path.strip("/")
+        if not path:
+            return False
+        first_seg = path.split("/")[0].lower()
+        if first_seg in cls._PROFILE_URL_EXCLUDED_SEGMENTS:
+            return False
+        if path.lower().startswith("profile.php"):
+            return True
+        if first_seg in ("people", "p"):
+            return True
+        # URL dạng facebook.com/<username> (một đoạn path, không có "/" con)
+        return "/" not in path
+
+    def _find_profile_links(self, max_count: int) -> List[str]:
+        """Thu thập danh sách URL hồ sơ/trang duy nhất từ trang kết quả hiện tại."""
+        found: List[str] = []
+        seen: set = set()
+        if not self._page:
+            return found
+        try:
+            anchors = self._page.query_selector_all("a[href]")
+        except Exception:
+            return found
+        for a in anchors:
+            try:
+                href = a.get_attribute("href")
+            except Exception:
+                continue
+            if not href:
+                continue
+            full_url = _normalize_fb_url(href)
+            if not self._looks_like_profile_url(full_url):
+                continue
+            key = full_url.split("?")[0].rstrip("/").lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append(full_url)
+            if len(found) >= max_count:
+                break
+        return found
+
+    def _scrape_about(
+        self,
+        target_url: str,
+        result: FbCollectionResult,
+        is_profile: bool = False,
+        source_tag_override: Optional[str] = None,
+    ) -> List[FbPhoneResult]:
         """Scrape phần About/Giới thiệu và Bio phần đầu trang của page hoặc profile cá nhân."""
         results = []
         if not self._page:
             return results
 
-        source_tag = SRC_PROFILE_BIO if is_profile else SRC_PLAYWRIGHT_ABOUT
+        source_tag = source_tag_override or (SRC_PROFILE_BIO if is_profile else SRC_PLAYWRIGHT_ABOUT)
 
         # 1. Thu thập từ trang chủ của Profile/Page (Bio header box)
         try:
@@ -551,18 +759,23 @@ class FacebookCollector:
 
                         post_url = specific_post_url or url
 
-                        # 2. Mở rộng các nhánh bình luận có thể nhìn thấy.
+                        # 2. Mở rộng & quét bình luận TRƯỚC khi quét toàn khối text của
+                        # post. Facebook lồng preview bình luận vào trong text của cả
+                        # khối bài viết, nên nếu quét khối "post" trước sẽ gắn nhầm SĐT
+                        # của bình luận thành nguồn "bài viết" (và loại dedupe theo
+                        # (SĐT, URL) sẽ giữ lại đúng bản ghi gắn nhãn sai đó). Quét bình
+                        # luận trước rồi loại trừ các SĐT đã tìm thấy khi quét post.
+                        comment_phone_keys: set = set()
                         if "comments" in sources:
                             self._expand_comment_threads(post)
+
+                            comment_texts: List[str] = []
 
                             # Một số nút mở bài viết trong dialog thay vì bung inline.
                             dialog = self._page.query_selector('div[role="dialog"]')
                             if dialog:
                                 try:
-                                    dialog_text = dialog.inner_text() or ""
-                                    self._append_phone_matches(
-                                        results, dialog_text, src_comment, post_url, page_name
-                                    )
+                                    comment_texts.append(dialog.inner_text() or "")
                                 except Exception as e_dlg:
                                     logger.debug("Lỗi đọc dialog bình luận: %s", e_dlg)
                                 finally:
@@ -571,24 +784,6 @@ class FacebookCollector:
                                     except Exception:
                                         pass
 
-                        post_text = post.inner_text() or ""
-                        if not post_text.strip():
-                            posts_processed += 1
-                            new_this_scroll += 1
-                            continue
-
-                        # Chỉ extract toàn khối một lần. Khi chỉ chọn Comments, khối
-                        # được gắn nguồn comment; các comment cụ thể vẫn được quét dưới đây.
-                        if "posts" in sources:
-                            self._append_phone_matches(
-                                results, post_text, src_post, post_url, page_name
-                            )
-                        elif "comments" in sources:
-                            self._append_phone_matches(
-                                results, post_text, src_comment, post_url, page_name
-                            )
-
-                        if "comments" in sources:
                             # Quét chi tiết từng thẻ comment cụ thể
                             comment_els = post.query_selector_all(
                                 'div[role="article"], div[aria-label*="Bình luận"], div[aria-label*="Comment"], '
@@ -597,13 +792,33 @@ class FacebookCollector:
                             for comment_el in comment_els[:100]:
                                 try:
                                     c_text = comment_el.inner_text() or ""
-                                    if not c_text.strip():
-                                        continue
-                                    self._append_phone_matches(
-                                        results, c_text, src_comment, post_url, page_name
-                                    )
+                                    if c_text.strip():
+                                        comment_texts.append(c_text)
                                 except Exception:
                                     pass
+
+                            for c_text in comment_texts:
+                                comment_phone_keys |= self._append_phone_matches(
+                                    results, c_text, src_comment, post_url, page_name
+                                )
+
+                        post_text = post.inner_text() or ""
+                        if not post_text.strip():
+                            posts_processed += 1
+                            new_this_scroll += 1
+                            continue
+
+                        # Chỉ extract toàn khối một lần, loại các SĐT đã gắn nguồn
+                        # "comment" ở trên để tránh gắn nhãn trùng/sai nguồn.
+                        if "posts" in sources:
+                            self._append_phone_matches(
+                                results, post_text, src_post, post_url, page_name,
+                                exclude=comment_phone_keys,
+                            )
+                        elif "comments" in sources:
+                            self._append_phone_matches(
+                                results, post_text, src_comment, post_url, page_name
+                            )
 
                         if "likers" in sources:
                             try:
@@ -717,14 +932,31 @@ class FacebookCollector:
         source: str,
         source_url: str,
         page_name: str,
-    ) -> None:
-        """Extract và thêm các SĐT hợp lệ từ một khối text."""
+        exclude: Optional[set] = None,
+    ) -> set:
+        """Extract và thêm các SĐT hợp lệ từ một khối text.
+
+        `exclude` (tuỳ chọn): tập SĐT đã chuẩn hóa cần bỏ qua khi thêm — dùng để
+        một SĐT đã được gắn nguồn chính xác hơn ở nơi khác (VD: bình luận) không
+        bị gắn nhãn sai (VD: "bài viết") do Facebook lồng preview bình luận vào
+        trong text của cả khối bài viết.
+
+        Trả về tập SĐT đã chuẩn hóa vừa được thêm.
+        """
+        added: set = set()
         for match in self._extractor.extract(text or "").matches:
+            normalized = self._normalizer.normalize(match.raw).normalized
+            if not normalized:
+                continue
+            if exclude and normalized in exclude:
+                continue
             phone = self._process_phone(
                 match.raw, source, source_url, match.context, page_name
             )
             if phone:
                 destination.append(phone)
+                added.add(normalized)
+        return added
 
     def _expand_comment_threads(self, post: Any, max_clicks: int = 5) -> None:
         """Mở comment/reply theo selector hẹp để tránh duyệt hàng trăm span mỗi bài."""
@@ -872,11 +1104,19 @@ class FacebookCollector:
             'a[href*="/videos/"]',
             'a[href*="/watch/"]',
             'a[href*="/reel/"]',
+            'a[href*="/story.php"]',
             'h2 a[href]', 'h3 a[href]', 'h4 a[href]',
             'span > a[role="link"][href]',
-            'a[aria-label*="giờ"][href]', 'a[aria-label*="phút"][href]',
-            'a[aria-label*="tháng"][href]', 'a[aria-label*="ngày"][href]',
-            'a[aria-label*="hrs"][href]', 'a[aria-label*="min"][href]',
+            # Nhãn thời gian tương đối tiếng Việt (mọi mốc: giây → năm)
+            'a[aria-label*="giây"][href]', 'a[aria-label*="phút"][href]',
+            'a[aria-label*="giờ"][href]', 'a[aria-label*="ngày"][href]',
+            'a[aria-label*="tuần"][href]', 'a[aria-label*="tháng"][href]',
+            'a[aria-label*="năm"][href]',
+            # Nhãn thời gian tương đối tiếng Anh (fallback khi giao diện tiếng Anh)
+            'a[aria-label*="sec"][href]', 'a[aria-label*="min"][href]',
+            'a[aria-label*="hr"][href]', 'a[aria-label*="day"][href]',
+            'a[aria-label*="week"][href]', 'a[aria-label*="month"][href]',
+            'a[aria-label*="year"][href]',
         ]
         try:
             for sel in selectors:
@@ -889,6 +1129,23 @@ class FacebookCollector:
                             return full_url
         except Exception:
             pass
+
+        # Fallback cuối: các selector cụ thể phía trên có thể không khớp DOM Facebook
+        # thay đổi liên tục. Quét toàn bộ liên kết trong bài viết và giữ liên kết đầu
+        # tiên trông giống URL bài viết cụ thể — tốt hơn nhiều so với việc rơi về URL
+        # chung của trang/nhóm/tìm kiếm cho MỌI bài viết đã quét.
+        try:
+            all_links = post_element.query_selector_all("a[href]")
+            for link in all_links[:60]:
+                href = link.get_attribute("href")
+                if not href:
+                    continue
+                full_url = _normalize_fb_url(href)
+                if self._looks_like_post_url(full_url):
+                    return full_url
+        except Exception:
+            pass
+
         return None
 
     @staticmethod
@@ -934,6 +1191,16 @@ class FacebookCollector:
     def _normalize_url(url: str) -> str:
         """Đảm bảo URL có scheme https://."""
         return _normalize_fb_url(url)
+
+    @staticmethod
+    def _normalize_search_query(text: str) -> str:
+        """Chuẩn hóa chuỗi tìm kiếm theo tên/từ khóa trước khi gửi cho Facebook:
+        gộp khoảng trắng thừa, bỏ khoảng trắng đầu/cuối. Facebook tự xử lý việc
+        tìm gần đúng (bỏ dấu, sai chính tả nhẹ...) trên cả kết quả Người/Trang lẫn
+        Bài viết nên không cần bóc dấu tiếng Việt ở phía client."""
+        if not text:
+            return ""
+        return re.sub(r"\s+", " ", str(text)).strip()
 
     @staticmethod
     def _extract_page_id(url: str) -> str:

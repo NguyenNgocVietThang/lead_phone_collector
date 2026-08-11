@@ -23,6 +23,11 @@ def _set_csrf(client, token="csrf-test-token"):
     return token
 
 
+def test_sqlite_utc_timestamp_is_displayed_in_vietnam_time(auth_web):
+    web, _ = auth_web
+    assert web.local_datetime("2026-08-11 06:46:14") == "2026-08-11 13:46:14"
+
+
 def test_register_is_public_and_uses_modern_hash(auth_web):
     web, database = auth_web
     with web.app.test_client() as client:

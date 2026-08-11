@@ -1,13 +1,16 @@
 {% extends "base.html" %}
 {% block title %}Danh sách Leads — Lead Phone Collector{% endblock %}
-{% block page_title %}📋 Danh sách Leads{% endblock %}
+{% block page_title %}Danh sách Leads{% endblock %}
+{% block content_class %} page-content--wide{% endblock %}
 
 {% block topbar_actions %}
 <div class="export-btns">
-  <a href="{{ url_for('export_excel', source=filters.source, status=filters.status, carrier=filters.carrier, collector_user=filters.collector_user, search=filters.search, search_mode=filters.search_mode) }}"
-     class="btn btn--success btn--sm">📥 Excel</a>
-  <a href="{{ url_for('export_csv', source=filters.source, status=filters.status, carrier=filters.carrier, collector_user=filters.collector_user, search=filters.search, search_mode=filters.search_mode) }}"
-     class="btn btn--outline btn--sm">📄 CSV</a>
+  <a href="{{ url_for('export_excel', source=filters.source, status=filters.status, collector_user=filters.collector_user, search=filters.search, search_mode=filters.search_mode) }}"
+     class="btn btn--success btn--sm">Excel</a>
+  <a href="{{ url_for('export_csv', source=filters.source, status=filters.status, collector_user=filters.collector_user, search=filters.search, search_mode=filters.search_mode) }}"
+     class="btn btn--outline btn--sm">CSV</a>
+  <a href="{{ url_for('export_sheets', source=filters.source, status=filters.status, collector_user=filters.collector_user, search=filters.search, search_mode=filters.search_mode) }}"
+     class="btn btn--outline btn--sm">Google Sheets</a>
 </div>
 {% endblock %}
 
@@ -25,9 +28,9 @@
         <div class="filter-group">
           <label class="form-label">Kiểu tìm kiếm</label>
           <select name="search_mode" class="form-select">
-            <option value="fuzzy" {% if filters.search_mode == 'fuzzy' or not filters.search_mode %}selected{% endif %}>⚡ Gần đúng / Không dấu</option>
-            <option value="partial" {% if filters.search_mode == 'partial' %}selected{% endif %}>🧩 Trùng 1 phần (Từ khóa)</option>
-            <option value="exact" {% if filters.search_mode == 'exact' %}selected{% endif %}>🎯 Chính xác cụm từ</option>
+            <option value="fuzzy" {% if filters.search_mode == 'fuzzy' or not filters.search_mode %}selected{% endif %}>Gần đúng / Không dấu</option>
+            <option value="partial" {% if filters.search_mode == 'partial' %}selected{% endif %}>Trùng 1 phần (Từ khóa)</option>
+            <option value="exact" {% if filters.search_mode == 'exact' %}selected{% endif %}>Chính xác cụm từ</option>
           </select>
         </div>
         <div class="filter-group">
@@ -35,16 +38,16 @@
           <select name="source" class="form-select">
             <option value="">Tất cả nguồn</option>
             <optgroup label="Facebook">
-              <option value="facebook" {% if filters.source == 'facebook' %}selected{% endif %}>📘 Tất cả Facebook</option>
-              <option value="fb_post" {% if filters.source == 'fb_post' %}selected{% endif %}>📝 FB — Bài viết</option>
-              <option value="fb_comment" {% if filters.source == 'fb_comment' %}selected{% endif %}>💬 FB — Comment</option>
-              <option value="fb_profile" {% if filters.source == 'fb_profile' %}selected{% endif %}>👤 FB — Profile / Bio</option>
-              <option value="fb_liker" {% if filters.source == 'fb_liker' %}selected{% endif %}>👍 FB — Lượt thích</option>
+              <option value="facebook" {% if filters.source == 'facebook' %}selected{% endif %}>Tất cả Facebook</option>
+              <option value="fb_post" {% if filters.source == 'fb_post' %}selected{% endif %}>FB — Bài viết</option>
+              <option value="fb_comment" {% if filters.source == 'fb_comment' %}selected{% endif %}>FB — Comment</option>
+              <option value="fb_profile" {% if filters.source == 'fb_profile' %}selected{% endif %}>FB — Profile / Bio</option>
+              <option value="fb_liker" {% if filters.source == 'fb_liker' %}selected{% endif %}>FB — Lượt thích</option>
             </optgroup>
             <optgroup label="Google Maps">
-              <option value="google_maps" {% if filters.source == 'google_maps' %}selected{% endif %}>🗺️ Tất cả Google Maps</option>
-              <option value="google_maps_details" {% if filters.source == 'google_maps_details' %}selected{% endif %}>📍 Maps — Details (Chi tiết)</option>
-              <option value="google_maps_comment" {% if filters.source == 'google_maps_comment' %}selected{% endif %}>💬 Maps — Comment (Đánh giá)</option>
+              <option value="google_maps" {% if filters.source == 'google_maps' %}selected{% endif %}>Tất cả Google Maps</option>
+              <option value="google_maps_details" {% if filters.source == 'google_maps_details' %}selected{% endif %}>Maps — Details (Chi tiết)</option>
+              <option value="google_maps_comment" {% if filters.source == 'google_maps_comment' %}selected{% endif %}>Maps — Comment (Đánh giá)</option>
             </optgroup>
           </select>
         </div>
@@ -53,7 +56,7 @@
           <select name="collector_user" class="form-select">
             <option value="">Tất cả người tìm</option>
             {% for c_user in distinct_collectors %}
-            <option value="{{ c_user }}" {% if filters.collector_user == c_user %}selected{% endif %}>👤 {{ c_user }}</option>
+            <option value="{{ c_user }}" {% if filters.collector_user == c_user %}selected{% endif %}>{{ c_user }}</option>
             {% endfor %}
           </select>
         </div>
@@ -67,24 +70,26 @@
             <option value="rejected" {% if filters.status == 'rejected' %}selected{% endif %}>Từ chối</option>
           </select>
         </div>
-        <div class="filter-group">
-          <label class="form-label">Nhà mạng</label>
-          <select name="carrier" class="form-select">
-            <option value="">Tất cả</option>
-            <option value="Viettel" {% if filters.carrier == 'Viettel' %}selected{% endif %}>Viettel</option>
-            <option value="MobiFone" {% if filters.carrier == 'MobiFone' %}selected{% endif %}>MobiFone</option>
-            <option value="VinaPhone" {% if filters.carrier == 'VinaPhone' %}selected{% endif %}>VinaPhone</option>
-            <option value="Vietnamobile" {% if filters.carrier == 'Vietnamobile' %}selected{% endif %}>Vietnamobile</option>
-          </select>
-        </div>
         <div class="filter-group filter-group--btn">
-          <button type="submit" class="btn btn--primary">🔍 Lọc</button>
+          <button type="submit" class="btn btn--primary">Lọc</button>
           <a href="{{ url_for('leads_page') }}" class="btn btn--outline">Đặt lại</a>
         </div>
       </div>
     </form>
   </div>
 </div>
+
+{% macro sort_th(col, label) %}
+{% set next_dir = 'desc' if (filters.sort_by == col and filters.sort_dir == 'asc') else 'asc' %}
+<th>
+  <a class="th-sort{% if filters.sort_by == col %} th-sort--active{% endif %}"
+     href="{{ url_for('leads_page', source=filters.source, status=filters.status, collector_user=filters.collector_user, search=filters.search, search_mode=filters.search_mode, sort_by=col, sort_dir=next_dir) }}"
+     title="Sắp xếp theo {{ label }}">
+    <span>{{ label }}</span>
+    <span class="th-sort__arrow">{% if filters.sort_by == col %}{{ '↑' if filters.sort_dir == 'asc' else '↓' }}{% else %}⇅{% endif %}</span>
+  </a>
+</th>
+{% endmacro %}
 
 <!-- Leads Table -->
 <div class="card card--table mt-4">
@@ -96,6 +101,11 @@
         {{ leads|length }} leads (trang {{ page }})
       {% endif %}
     </h2>
+    <div class="table-quick-search">
+      <input type="text" id="table-quick-search" class="form-input form-input--sm"
+             placeholder="Tìm nhanh trong trang này…" oninput="quickFilterTable(this.value)"
+             title="Lọc tức thời các dòng đang hiển thị (không cần bấm Lọc)">
+    </div>
   </div>
   <div class="card__body p-0">
     {% if leads %}
@@ -104,15 +114,13 @@
         <thead>
           <tr>
             <th style="width:40px">#</th>
-            <th>Tên</th>
-            <th>Số điện thoại</th>
-            <th>Nhà mạng</th>
-            <th>Nguồn</th>
-            <th>Người tìm kiếm</th>
-            <th>Địa chỉ</th>
-            <th>Trạng thái</th>
-            <th>Ngày thu thập</th>
-            <th>Hành động</th>
+            {{ sort_th('name', 'Tên') }}
+            {{ sort_th('phone', 'Số điện thoại') }}
+            {{ sort_th('source', 'Nguồn') }}
+            {{ sort_th('collector_user', 'Người tìm kiếm') }}
+            {{ sort_th('address', 'Địa chỉ') }}
+            {{ sort_th('status', 'Trạng thái') }}
+            {{ sort_th('collected_at', 'Ngày thu thập') }}
           </tr>
         </thead>
         <tbody>
@@ -131,16 +139,12 @@
                 {% set lead_src_url = 'https://www.facebook.com' ~ lead_src_url %}
               {% endif %}
               <div class="phone-cell">
-                <span class="phone-number">{{ lead.phone_normalized }}</span>
+                <span class="phone-number phone-number--copy" data-phone="{{ lead.phone_normalized }}"
+                      onclick="copyPhone(this.dataset.phone)" title="Bấm để copy SĐT">{{ lead.phone_normalized }}</span>
                 {% if lead_src_url %}
-                <a href="{{ lead_src_url }}" target="_blank" class="source-link" title="Mở link nguồn bài viết: {{ lead_src_url }}">🔗</a>
+                <a href="{{ lead_src_url }}" target="_blank" class="source-link" title="Mở link nguồn bài viết: {{ lead_src_url }}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></a>
                 {% endif %}
               </div>
-            </td>
-            <td>
-              <span class="badge badge--carrier-{{ (lead.carrier or '').lower() }}">
-                {{ lead.carrier or '?' }}
-              </span>
             </td>
             <td>
               {% set s_info = lead.source|source_info %}
@@ -158,18 +162,18 @@
 
               {% if target_url %}
               <a href="{{ target_url }}" target="_blank" rel="noopener noreferrer" class="source-tag {{ s_info.badge_class }}" title="Nguồn: {{ s_info.label }} | Mở link: {{ target_url }}">
-                <span>{{ s_info.icon }} {{ s_info.short_label }}</span>
-                <span class="source-icon">🔗</span>
+                <span>{{ s_info.short_label }}</span>
+                <span class="source-icon"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></span>
               </a>
               {% else %}
               <span class="source-tag {{ s_info.badge_class }}" title="Nguồn: {{ s_info.label }}">
-                <span>{{ s_info.icon }} {{ s_info.short_label }}</span>
+                <span>{{ s_info.short_label }}</span>
               </span>
               {% endif %}
             </td>
             <td>
               <span class="user-badge" style="font-size:12px; color:#475569; display:inline-flex; align-items:center; gap:4px; background:#F1F5F9; padding:2px 6px; border-radius:4px; border:1px solid #E2E8F0;" title="Người tìm kiếm">
-                👤 {{ lead.collector_user or 'Chưa rõ' }}
+                {{ lead.collector_user or 'Chưa rõ' }}
               </span>
             </td>
             <td class="text-truncate text-muted" style="max-width:180px" title="{{ lead.address }}">
@@ -177,18 +181,14 @@
             </td>
             <td>
               <select class="status-select" data-lead-id="{{ lead.id }}" onchange="updateStatus(this)">
-                <option value="new" {% if lead.status == 'new' %}selected{% endif %}>🆕 Mới</option>
-                <option value="contacted" {% if lead.status == 'contacted' %}selected{% endif %}>📞 Đã gọi</option>
-                <option value="qualified" {% if lead.status == 'qualified' %}selected{% endif %}>✅ Tiềm năng</option>
-                <option value="rejected" {% if lead.status == 'rejected' %}selected{% endif %}>❌ Loại</option>
+                <option value="new" {% if lead.status == 'new' %}selected{% endif %}>Mới</option>
+                <option value="contacted" {% if lead.status == 'contacted' %}selected{% endif %}>Đã gọi</option>
+                <option value="qualified" {% if lead.status == 'qualified' %}selected{% endif %}>Tiềm năng</option>
+                <option value="rejected" {% if lead.status == 'rejected' %}selected{% endif %}>Loại</option>
               </select>
             </td>
             <td class="text-muted text-sm">
-              {{ (lead.collected_at or '')[:10] }}
-            </td>
-            <td>
-              <button class="btn btn--ghost btn--xs" data-phone="{{ lead.phone_normalized }}" onclick="copyPhone(this.dataset.phone)"
-                      title="Copy SĐT">📋</button>
+              {{ lead.collected_at | local_datetime('%Y-%m-%d') if lead.collected_at else '' }}
             </td>
           </tr>
           {% endfor %}
@@ -199,17 +199,16 @@
     <!-- Pagination -->
     <div class="pagination">
       {% if page > 1 %}
-      <a href="{{ url_for('leads_page', source=filters.source, status=filters.status, carrier=filters.carrier, collector_user=filters.collector_user, search=filters.search, search_mode=filters.search_mode, page=page - 1) }}" class="btn btn--outline btn--sm">← Trước</a>
+      <a href="{{ url_for('leads_page', source=filters.source, status=filters.status, collector_user=filters.collector_user, search=filters.search, search_mode=filters.search_mode, sort_by=filters.sort_by, sort_dir=filters.sort_dir, page=page - 1) }}" class="btn btn--outline btn--sm">← Trước</a>
       {% endif %}
       <span class="pagination__info">Trang {{ page }} / {{ total_pages }}</span>
       {% if page < total_pages %}
-      <a href="{{ url_for('leads_page', source=filters.source, status=filters.status, carrier=filters.carrier, collector_user=filters.collector_user, search=filters.search, search_mode=filters.search_mode, page=page + 1) }}" class="btn btn--outline btn--sm">Sau →</a>
+      <a href="{{ url_for('leads_page', source=filters.source, status=filters.status, collector_user=filters.collector_user, search=filters.search, search_mode=filters.search_mode, sort_by=filters.sort_by, sort_dir=filters.sort_dir, page=page + 1) }}" class="btn btn--outline btn--sm">Sau →</a>
       {% endif %}
     </div>
 
     {% else %}
     <div class="empty-state">
-      <div class="empty-state__icon">📭</div>
       <div class="empty-state__text">Chưa có leads nào</div>
       <a href="{{ url_for('index') }}" class="btn btn--primary">Bắt đầu thu thập</a>
     </div>
@@ -245,6 +244,42 @@ async function updateStatus(selectEl) {
 function copyPhone(phone) {
   if (!phone) return;
   navigator.clipboard.writeText(phone).then(() => showToast(`Đã copy: ${phone}`));
+}
+
+// ── Tìm nhanh trong trang hiện tại (client-side, không cần bấm Lọc) ────────
+function removeAccentsJs(str) {
+  return (str || '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/đ/g, 'd').replace(/Đ/g, 'D')
+    .toLowerCase();
+}
+
+let _quickFilterTimer = null;
+function quickFilterTable(rawQuery) {
+  clearTimeout(_quickFilterTimer);
+  _quickFilterTimer = setTimeout(() => {
+    const query = removeAccentsJs(rawQuery.trim());
+    const rows = document.querySelectorAll('#leads-table tbody tr');
+    let visibleCount = 0;
+    rows.forEach(row => {
+      const match = !query || removeAccentsJs(row.textContent).includes(query);
+      row.style.display = match ? '' : 'none';
+      if (match) visibleCount += 1;
+    });
+    let emptyRow = document.getElementById('quick-filter-empty-row');
+    const tbody = document.querySelector('#leads-table tbody');
+    if (visibleCount === 0) {
+      if (!emptyRow) {
+        emptyRow = document.createElement('tr');
+        emptyRow.id = 'quick-filter-empty-row';
+        const colCount = document.querySelectorAll('#leads-table thead th').length;
+        emptyRow.innerHTML = `<td colspan="${colCount}" class="text-muted text-center" style="padding:24px;">Không có dòng nào khớp trong trang này</td>`;
+        tbody.appendChild(emptyRow);
+      }
+    } else if (emptyRow) {
+      emptyRow.remove();
+    }
+  }, 120);
 }
 
 function showToast(msg, type = 'success') {

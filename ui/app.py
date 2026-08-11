@@ -10,6 +10,7 @@ Routes:
   GET  /api/job-status/<id>    Kiểm tra tiến độ job
   GET  /export/excel        Download Excel
   GET  /export/csv          Download CSV
+  GET  /export/sheets       Đồng bộ leads lên Google Sheets
   GET  /settings            Trang cấu hình
 """
 
@@ -19,7 +20,7 @@ import logging
 import re
 import secrets
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit, urlunsplit
 
 from authlib.integrations.base_client.errors import OAuthError
@@ -36,6 +37,7 @@ from storage.database import LeadDatabase, Lead
 from processors.source_helper import get_source_info
 from exporters.excel_export import ExcelExporter
 from exporters.csv_export import CsvExporter
+from exporters.sheets_export import SheetsExporter, SheetsExportError
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +53,23 @@ app.config.update(
     SESSION_COOKIE_SECURE=settings.APP_BASE_URL.lower().startswith("https://"),
 )
 app.jinja_env.filters["source_info"] = get_source_info
+
+
+def local_datetime(value, date_format="%Y-%m-%d %H:%M:%S"):
+    """Đổi timestamp UTC từ SQLite sang giờ địa phương cấu hình của ứng dụng."""
+    if not value:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        app_tz = timezone(timedelta(hours=settings.APP_UTC_OFFSET_HOURS))
+        return parsed.astimezone(app_tz).strftime(date_format)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+app.jinja_env.filters["local_datetime"] = local_datetime
 
 oauth = OAuth(app)
 oauth.register(
@@ -249,6 +268,9 @@ def oauth_login(provider: str):
 
     session["oauth_next"] = _safe_next_url(request.args.get("next"))
     redirect_uri = f"{settings.APP_BASE_URL}/auth/{provider}/callback"
+    # Ghi log redirect_ui để dễ đối chiếu với Authorized redirect URI đã đăng ký
+    # tại Google Cloud Console / Meta for Developers khi gặp lỗi "redirect_uri_mismatch".
+    logger.info("Bắt đầu OAuth %s, redirect_uri=%s", provider, redirect_uri)
     client = oauth.create_client(provider)
     if client is None:
         abort(500, description="OAuth provider chưa được khởi tạo.")
@@ -365,22 +387,23 @@ def collect_maps():
 
 @app.route("/collect/facebook", methods=["POST"])
 def collect_facebook():
-    """Trigger Facebook collection job (Page, Profile cá nhân, Group, hoặc Từ khóa search)."""
-    target_type = request.form.get("target_type", "auto").strip()
+    """Trigger Facebook collection job (Tìm theo Link hoặc Tìm theo Tên)."""
+    target_type = request.form.get("target_type", "link").strip()
     target_value = request.form.get("target_value", "").strip() or request.form.get("page_url", "").strip()
     sources = request.form.getlist("sources") or ["about", "posts", "comments", "likers"]
     max_posts = int(request.form.get("max_posts", 30))
+    max_profiles = int(request.form.get("max_profiles", 5) or 5)
     collector_user = session.get("user_identity", "Admin")
 
     if not target_value:
-        flash("Vui lòng nhập URL Facebook hoặc từ khóa tìm kiếm.", "error")
+        flash("Vui lòng nhập URL Facebook, từ khóa hoặc tên cần tìm kiếm.", "error")
         return redirect(url_for("index"))
 
     job_id = db.create_job("facebook", f"[{target_type}] {target_value}", collector_user=collector_user)
 
     thread = threading.Thread(
         target=_run_facebook_job,
-        args=(job_id, target_value, target_type, sources, max_posts, collector_user),
+        args=(job_id, target_value, target_type, sources, max_posts, collector_user, max_profiles),
         daemon=True,
     )
     thread.start()
@@ -408,17 +431,17 @@ def leads_page():
     """Bảng danh sách leads với filter và tìm kiếm linh hoạt (gần đúng / trùng 1 phần / chính xác)."""
     source = request.args.get("source", "")
     status = request.args.get("status", "")
-    carrier = request.args.get("carrier", "")
     collector_user = request.args.get("collector_user", "")
     search = request.args.get("search", "")
     search_mode = request.args.get("search_mode", "fuzzy")
+    sort_by = request.args.get("sort_by", "")
+    sort_dir = request.args.get("sort_dir", "asc")
     page = int(request.args.get("page", 1))
     per_page = 50
 
     total_leads = db.count_leads(
         source=source or None,
         status=status or None,
-        carrier=carrier or None,
         collector_user=collector_user or None,
         search=search or None,
         search_mode=search_mode,
@@ -427,10 +450,11 @@ def leads_page():
     leads = db.get_leads(
         source=source or None,
         status=status or None,
-        carrier=carrier or None,
         collector_user=collector_user or None,
         search=search or None,
         search_mode=search_mode,
+        sort_by=sort_by or None,
+        sort_dir=sort_dir,
         limit=per_page,
         offset=(page - 1) * per_page,
     )
@@ -447,10 +471,11 @@ def leads_page():
         filters={
             "source": source,
             "status": status,
-            "carrier": carrier,
             "collector_user": collector_user,
             "search": search,
             "search_mode": search_mode,
+            "sort_by": sort_by,
+            "sort_dir": sort_dir,
         },
         page=page,
         per_page=per_page,
@@ -558,6 +583,40 @@ def export_csv():
     return send_file(str(path), as_attachment=True, download_name=path.name)
 
 
+@app.route("/export/sheets")
+def export_sheets():
+    """Đồng bộ (ghi đè) leads đang lọc lên Google Sheets đã cấu hình."""
+    source = request.args.get("source")
+    status = request.args.get("status")
+    carrier = request.args.get("carrier")
+    collector_user = request.args.get("collector_user")
+    search = request.args.get("search")
+    search_mode = request.args.get("search_mode", "fuzzy")
+
+    leads = db.get_all_for_export(
+        source=source or None,
+        status=status or None,
+        carrier=carrier or None,
+        collector_user=collector_user or None,
+        search=search or None,
+        search_mode=search_mode,
+    )
+
+    if not leads:
+        flash("Không có dữ liệu để đồng bộ.", "warning")
+        return redirect(url_for("leads_page"))
+
+    try:
+        exporter = SheetsExporter()
+        url = exporter.export(leads)
+    except SheetsExportError as e:
+        flash(f"Đồng bộ Google Sheets thất bại: {e}", "error")
+        return redirect(url_for("leads_page"))
+
+    flash(f"Đã đồng bộ {len(leads)} leads lên Google Sheets.", "success")
+    return redirect(url)
+
+
 # ---------------------------------------------------------------------------
 # Routes — Settings
 # ---------------------------------------------------------------------------
@@ -576,6 +635,13 @@ def settings_page():
         "selenium_headless": settings.PLAYWRIGHT_HEADLESS,
         "delay_min": settings.PLAYWRIGHT_DELAY_MIN,
         "delay_max": settings.PLAYWRIGHT_DELAY_MAX,
+        # Đăng nhập ứng dụng bằng OAuth (Google/Facebook) — khác với phiên
+        # Playwright ở trên. Lỗi phổ biến nhất là redirect URI/App ID chưa
+        # được đăng ký đúng ở Google Cloud Console / Meta for Developers.
+        "google_oauth_configured": bool(settings.GOOGLE_CLIENT_ID and settings.GOOGLE_CLIENT_SECRET),
+        "facebook_oauth_configured": bool(settings.FACEBOOK_APP_ID and settings.FACEBOOK_APP_SECRET),
+        "google_oauth_redirect_uri": f"{settings.APP_BASE_URL}/auth/google/callback",
+        "facebook_oauth_redirect_uri": f"{settings.APP_BASE_URL}/auth/facebook/callback",
     }
     return render_template("settings.html", config=config_info)
 
@@ -704,8 +770,16 @@ def _run_maps_job(
         threading.Timer(300, lambda: _active_jobs.pop(job_id, None)).start()
 
 
-def _run_facebook_job(job_id: int, target: str, target_type: str, sources: list, max_posts: int, collector_user: str = ""):
-    """Chạy Facebook collector trong background thread (hỗ trợ page, group, search)."""
+def _run_facebook_job(
+    job_id: int,
+    target: str,
+    target_type: str,
+    sources: list,
+    max_posts: int,
+    collector_user: str = "",
+    max_profiles: int = 5,
+):
+    """Chạy Facebook collector trong background thread (hỗ trợ page, group, search, tìm theo tên)."""
     from collectors.facebook import FacebookCollector
     from storage.sheets import GoogleSheetsSync
 
@@ -716,7 +790,10 @@ def _run_facebook_job(job_id: int, target: str, target_type: str, sources: list,
 
     try:
         with FacebookCollector(progress_callback=on_progress) as collector:
-            result = collector.collect(target=target, target_type=target_type, sources=sources, max_posts=max_posts)
+            result = collector.collect(
+                target=target, target_type=target_type, sources=sources,
+                max_posts=max_posts, max_profiles=max_profiles,
+            )
 
         leads = []
         for fb_result in result.results:

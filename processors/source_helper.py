@@ -11,7 +11,7 @@ def get_source_info(source: str) -> Dict[str, Any]:
     - label: Tên nhãn đầy đủ tiếng Việt (dùng cho export Excel/CSV)
     - short_label: Nhãn ngắn gọn hiển thị trên badge
     - category: facebook | google_maps | other
-    - icon: Biểu tượng đại diện (📝, 💬, 👤, 📍, 👍, 🌐)
+    - icon: Biểu tượng đại diện
     - badge_class: Class CSS định style màu sắc
     """
     s = (source or "").lower().strip()
@@ -22,14 +22,14 @@ def get_source_info(source: str) -> Dict[str, Any]:
                 "label": "Google Maps — Comment",
                 "short_label": "Maps — Comment",
                 "category": "google_maps",
-                "icon": "💬",
+                "icon": "",
                 "badge_class": "source-tag--maps-comment",
             }
         return {
             "label": "Facebook — Comment",
             "short_label": "FB — Comment",
             "category": "facebook",
-            "icon": "💬",
+            "icon": "",
             "badge_class": "source-tag--fb-comment",
         }
     elif "post" in s:
@@ -37,7 +37,7 @@ def get_source_info(source: str) -> Dict[str, Any]:
             "label": "Facebook — Bài viết",
             "short_label": "FB — Bài viết",
             "category": "facebook",
-            "icon": "📝",
+            "icon": "",
             "badge_class": "source-tag--fb-post",
         }
     elif any(k in s for k in ["about", "bio", "profile"]):
@@ -45,7 +45,7 @@ def get_source_info(source: str) -> Dict[str, Any]:
             "label": "Facebook — Profile / Bio",
             "short_label": "FB — Profile",
             "category": "facebook",
-            "icon": "👤",
+            "icon": "",
             "badge_class": "source-tag--fb-profile",
         }
     elif "liker" in s:
@@ -53,7 +53,7 @@ def get_source_info(source: str) -> Dict[str, Any]:
             "label": "Facebook — Lượt thích",
             "short_label": "FB — Lượt thích",
             "category": "facebook",
-            "icon": "👍",
+            "icon": "",
             "badge_class": "source-tag--fb-liker",
         }
     elif s.startswith("fb"):
@@ -61,7 +61,7 @@ def get_source_info(source: str) -> Dict[str, Any]:
             "label": "Facebook",
             "short_label": "Facebook",
             "category": "facebook",
-            "icon": "📘",
+            "icon": "",
             "badge_class": "source-tag--fb-default",
         }
     elif s in ["google_maps_comment", "google_maps_review"]:
@@ -69,7 +69,7 @@ def get_source_info(source: str) -> Dict[str, Any]:
             "label": "Google Maps — Comment",
             "short_label": "Maps — Comment",
             "category": "google_maps",
-            "icon": "💬",
+            "icon": "",
             "badge_class": "source-tag--maps-comment",
         }
     elif s in ["google_maps", "google_maps_details"] or "maps" in s:
@@ -77,7 +77,7 @@ def get_source_info(source: str) -> Dict[str, Any]:
             "label": "Google Maps — Details",
             "short_label": "Maps — Details",
             "category": "google_maps",
-            "icon": "📍",
+            "icon": "",
             "badge_class": "source-tag--maps-details",
         }
     else:
@@ -86,7 +86,7 @@ def get_source_info(source: str) -> Dict[str, Any]:
             "label": clean or "Khác",
             "short_label": clean or "Khác",
             "category": "other",
-            "icon": "🌐",
+            "icon": "",
             "badge_class": "source-tag--default",
         }
 

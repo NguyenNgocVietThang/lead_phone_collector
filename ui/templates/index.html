@@ -1,51 +1,43 @@
 {% extends "base.html" %}
 {% block title %}Dashboard — Lead Phone Collector{% endblock %}
-{% block page_title %}🏠 Dashboard{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
 
 {% block content %}
 <!-- Stats Cards -->
 <div class="stats-grid">
   <div class="stat-card stat-card--primary">
-    <div class="stat-card__icon">📞</div>
+    <div class="stat-card__icon">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+    </div>
     <div class="stat-card__body">
       <div class="stat-card__value">{{ stats.total }}</div>
       <div class="stat-card__label">Tổng leads</div>
     </div>
   </div>
   <div class="stat-card stat-card--success">
-    <div class="stat-card__icon">🆕</div>
+    <div class="stat-card__icon">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+    </div>
     <div class="stat-card__body">
       <div class="stat-card__value">{{ stats.today }}</div>
       <div class="stat-card__label">Hôm nay</div>
     </div>
   </div>
   <div class="stat-card stat-card--info">
-    <div class="stat-card__icon">🗺️</div>
+    <div class="stat-card__icon">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--info)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+    </div>
     <div class="stat-card__body">
-      <div class="stat-card__value">{{ stats.by_source.get('google_maps', 0) }}</div>
+      <div class="stat-card__value">{{ stats.by_source_group.google_maps }}</div>
       <div class="stat-card__label">Từ Google Maps</div>
     </div>
   </div>
   <div class="stat-card stat-card--purple">
-    <div class="stat-card__icon">📘</div>
+    <div class="stat-card__icon">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--purple)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"/></svg>
+    </div>
     <div class="stat-card__body">
-      <div class="stat-card__value">
-        {{ (stats.by_source.get('fb_playwright_post', 0) +
-            stats.by_source.get('fb_playwright_comment', 0) +
-            stats.by_source.get('fb_playwright_about', 0) +
-            stats.by_source.get('fb_playwright_liker', 0) +
-            stats.by_source.get('fb_profile_bio', 0) +
-            stats.by_source.get('fb_profile_post', 0) +
-            stats.by_source.get('fb_profile_comment', 0) +
-            stats.by_source.get('fb_profile_liker', 0) +
-            stats.by_source.get('fb_group_post', 0) +
-            stats.by_source.get('fb_group_comment', 0) +
-            stats.by_source.get('fb_group_liker', 0) +
-            stats.by_source.get('fb_search_post', 0) +
-            stats.by_source.get('fb_search_comment', 0) +
-            stats.by_source.get('fb_search_liker', 0) +
-            stats.by_source.get('fb_graph_post', 0)) }}
-      </div>
+      <div class="stat-card__value">{{ stats.by_source_group.facebook }}</div>
       <div class="stat-card__label">Từ Facebook</div>
     </div>
   </div>
@@ -56,7 +48,7 @@
   <!-- Google Maps Form -->
   <div class="card">
     <div class="card__header">
-      <h2 class="card__title">🗺️ Thu thập từ Google Maps</h2>
+      <h2 class="card__title">Thu thập từ Google Maps</h2>
     </div>
     <div class="card__body">
       <form method="POST" action="{{ url_for('collect_maps') }}" id="form-maps">
@@ -76,7 +68,7 @@
                  value="50" min="5" max="200">
         </div>
         <button type="submit" class="btn btn--primary btn--full" id="btn-maps">
-          <span class="btn__icon">🔍</span> Bắt đầu thu thập
+          Bắt đầu thu thập
         </button>
       </form>
     </div>
@@ -85,39 +77,42 @@
   <!-- Facebook Form -->
   <div class="card">
     <div class="card__header" style="display:flex; justify-content:space-between; align-items:center;">
-      <h2 class="card__title">📘 Thu thập từ Facebook</h2>
+      <h2 class="card__title">Thu thập từ Facebook</h2>
       <a href="{{ url_for('settings_page') }}" class="badge badge--info" style="text-decoration:none;" title="Chỉnh sửa session đăng nhập trong phần Cấu hình">
-        🔑 Session: Ẩn danh / Login
+        Session: Ẩn danh / Login
       </a>
     </div>
     <div class="card__body">
       <form method="POST" action="{{ url_for('collect_facebook') }}" id="form-fb">
         <div class="form-group">
-          <label class="form-label">Loại mục tiêu</label>
-          <div class="radio-group" style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
-            <label class="checkbox-label">
-              <input type="radio" name="target_type" value="page" checked onchange="updateFbPlaceholder('page')">
-              📄 Fanpage
+          <label class="form-label">Cách tìm kiếm</label>
+          <div class="radio-group">
+            <label class="radio-tab">
+              <input type="radio" name="target_type" value="name_search" checked onchange="updateFbPlaceholder('name_search')">
+              <span>Tìm theo Tên</span>
             </label>
-            <label class="checkbox-label">
-              <input type="radio" name="target_type" value="profile" onchange="updateFbPlaceholder('profile')">
-              👤 Profile cá nhân
-            </label>
-            <label class="checkbox-label">
-              <input type="radio" name="target_type" value="group" onchange="updateFbPlaceholder('group')">
-              👥 Hội Nhóm (Group)
-            </label>
-            <label class="checkbox-label">
-              <input type="radio" name="target_type" value="search" onchange="updateFbPlaceholder('search')">
-              🔍 Tìm kiếm từ khóa
+            <label class="radio-tab">
+              <input type="radio" name="target_type" value="link" onchange="updateFbPlaceholder('link')">
+              <span>Tìm theo Link</span>
             </label>
           </div>
         </div>
 
         <div class="form-group">
-          <label class="form-label" id="label-fb-input" for="target_value">URL Facebook Page *</label>
+          <label class="form-label" id="label-fb-input" for="target_value">Tên người/trang hoặc từ khóa *</label>
           <input type="text" id="target_value" name="target_value" class="form-input"
-                 placeholder="https://www.facebook.com/tenpage" required>
+                 placeholder="VD: Nguyễn Văn A, sang nhượng spa quận 1..." required>
+          <div class="setting-hint" id="hint-fb-input">
+            Tìm đồng thời bài viết chứa từ khóa và hồ sơ/trang khớp tên. Chuỗi tìm kiếm được tự chuẩn hóa khoảng trắng;
+            việc bỏ dấu và tìm gần đúng do Facebook xử lý.
+          </div>
+        </div>
+
+        <div class="form-group" id="group-max-profiles">
+          <label class="form-label" for="max_profiles">Số hồ sơ/trang tối đa quét</label>
+          <input type="number" id="max_profiles" name="max_profiles" class="form-input"
+                 value="5" min="1" max="20">
+          <div class="setting-hint">Số hồ sơ/trang khớp tên sẽ được quét lần lượt (Bio + Bài viết + Bình luận).</div>
         </div>
 
         <div class="form-group">
@@ -137,7 +132,7 @@
             </label>
             <label class="checkbox-label">
               <input type="checkbox" name="sources" value="likers" checked>
-              👍 Lượt thích (Likers)
+              Lượt thích (Likers)
             </label>
           </div>
         </div>
@@ -147,7 +142,7 @@
                  value="30" min="5" max="100">
         </div>
         <button type="submit" class="btn btn--blue btn--full" id="btn-fb">
-          <span class="btn__icon">🔍</span> Bắt đầu thu thập Facebook
+          Bắt đầu thu thập Facebook
         </button>
       </form>
     </div>
@@ -158,24 +153,22 @@
 function updateFbPlaceholder(type) {
   const label = document.getElementById('label-fb-input');
   const input = document.getElementById('target_value');
+  const hint = document.getElementById('hint-fb-input');
   const lblAbout = document.getElementById('lbl-about');
+  const groupMaxProfiles = document.getElementById('group-max-profiles');
 
-  if (type === 'page') {
-    label.innerText = 'URL Facebook Page *';
-    input.placeholder = 'https://www.facebook.com/tenpage';
+  if (type === 'link') {
+    label.innerText = 'URL Facebook (Page / Profile / Hội nhóm) *';
+    input.placeholder = 'https://www.facebook.com/tenpage, /groups/ten-hoi-nhom, /profile.php?id=...';
+    hint.innerText = 'Loại mục tiêu (Fanpage, Profile cá nhân, hay Hội nhóm) được tự nhận diện từ URL.';
     if (lblAbout) lblAbout.style.display = 'inline-flex';
-  } else if (type === 'profile') {
-    label.innerText = 'URL Profile cá nhân *';
-    input.placeholder = 'https://www.facebook.com/username hoặc profile.php?id=...';
+    if (groupMaxProfiles) groupMaxProfiles.style.display = 'none';
+  } else {
+    label.innerText = 'Tên người/trang hoặc từ khóa *';
+    input.placeholder = 'VD: Nguyễn Văn A, sang nhượng spa quận 1...';
+    hint.innerText = 'Tìm đồng thời bài viết chứa từ khóa và hồ sơ/trang khớp tên. Chuỗi tìm kiếm được tự chuẩn hóa khoảng trắng; việc bỏ dấu và tìm gần đúng do Facebook xử lý.';
     if (lblAbout) lblAbout.style.display = 'inline-flex';
-  } else if (type === 'group') {
-    label.innerText = 'URL Hội Nhóm (Group) *';
-    input.placeholder = 'https://www.facebook.com/groups/ten-hoi-nhom';
-    if (lblAbout) lblAbout.style.display = 'none';
-  } else if (type === 'search') {
-    label.innerText = 'Từ khóa tìm kiếm Facebook *';
-    input.placeholder = 'VD: sang nhượng spa hà nội, bán chung cư...';
-    if (lblAbout) lblAbout.style.display = 'none';
+    if (groupMaxProfiles) groupMaxProfiles.style.display = 'block';
   }
 }
 </script>
@@ -184,7 +177,7 @@ function updateFbPlaceholder(type) {
 {% if recent_jobs %}
 <div class="card mt-4">
   <div class="card__header">
-    <h2 class="card__title">🕐 Công việc gần đây</h2>
+    <h2 class="card__title">Công việc gần đây</h2>
   </div>
   <div class="card__body p-0">
     <table class="table">
@@ -200,11 +193,11 @@ function updateFbPlaceholder(type) {
           <td><a href="{{ url_for('job_status_page', job_id=job.id) }}">#{{ job.id }}</a></td>
           <td><span class="badge badge--{{ 'green' if job.source == 'google_maps' else 'blue' }}">{{ job.source }}</span></td>
           <td class="text-truncate" style="max-width:180px">{{ job.query }}</td>
-          <td><span class="user-badge" style="font-size:12px; color:#475569;">👤 {{ job.collector_user or 'Chưa rõ' }}</span></td>
+          <td><span class="user-badge" style="font-size:12px; color:#475569;">{{ job.collector_user or 'Chưa rõ' }}</span></td>
           <td><span class="badge badge--{{ 'success' if job.status == 'done' else ('danger' if job.status == 'failed' else 'warning') }}">{{ job.status }}</span></td>
           <td>{{ job.total_found or 0 }}</td>
           <td>{{ job.new_leads or 0 }}</td>
-          <td class="text-muted text-sm">{{ job.started_at[:16] if job.started_at else '' }}</td>
+          <td class="text-muted text-sm">{{ job.started_at | local_datetime('%Y-%m-%d %H:%M') if job.started_at else '' }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -217,7 +210,7 @@ function updateFbPlaceholder(type) {
 {% if recent_leads %}
 <div class="card mt-4">
   <div class="card__header">
-    <h2 class="card__title">📋 Leads mới nhất</h2>
+    <h2 class="card__title">Leads mới nhất</h2>
     <a href="{{ url_for('leads_page') }}" class="btn btn--sm btn--outline">Xem tất cả →</a>
   </div>
   <div class="card__body p-0">
@@ -246,18 +239,18 @@ function updateFbPlaceholder(type) {
             {% endif %}
             {% if target_url %}
             <a href="{{ target_url }}" target="_blank" rel="noopener noreferrer" class="source-tag {{ s_info.badge_class }}" title="Nguồn: {{ s_info.label }} | Mở link: {{ target_url }}">
-              <span>{{ s_info.icon }} {{ s_info.short_label }}</span> <span class="source-icon">🔗</span>
+              <span>{{ s_info.short_label }}</span> <span class="source-icon"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></span>
             </a>
             {% else %}
             <span class="source-tag {{ s_info.badge_class }}" title="Nguồn: {{ s_info.label }}">
-              <span>{{ s_info.icon }} {{ s_info.short_label }}</span>
+              <span>{{ s_info.short_label }}</span>
             </span>
             {% endif %}
           </td>
           <td>
-            <span class="user-badge" style="font-size:12px; color:#475569;">👤 {{ lead.collector_user or 'Chưa rõ' }}</span>
+            <span class="user-badge" style="font-size:12px; color:#475569;">{{ lead.collector_user or 'Chưa rõ' }}</span>
           </td>
-          <td class="text-muted text-sm">{{ lead.collected_at[:10] if lead.collected_at else '' }}</td>
+          <td class="text-muted text-sm">{{ lead.collected_at | local_datetime('%Y-%m-%d') if lead.collected_at else '' }}</td>
         </tr>
         {% endfor %}
       </tbody>

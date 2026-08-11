@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Tiến độ Job — Lead Phone Collector{% endblock %}
-{% block page_title %}⏳ Tiến độ Thu thập{% endblock %}
+{% block page_title %}Tiến độ Thu thập{% endblock %}
 
 {% set dot_class = 'status-dot--running' if job.status == 'running' else ('status-dot--done' if job.status == 'done' else 'status-dot--failed') %}
 
@@ -12,7 +12,7 @@
   <div class="card__body">
     <div class="job-info">
       <div class="job-detail"><span class="label">Query:</span> <strong>{{ job.query }}</strong></div>
-      <div class="job-detail"><span class="label">Bắt đầu:</span> {{ job.started_at or '—' }}</div>
+      <div class="job-detail"><span class="label">Bắt đầu:</span> {{ job.started_at | local_datetime if job.started_at else '—' }}</div>
     </div>
 
     <!-- Status indicator -->
@@ -32,7 +32,7 @@
     </div>
 
     {% if job.error_message %}
-    <div class="error-box">⚠️ {{ job.error_message }}</div>
+    <div class="error-box">Lỗi: {{ job.error_message }}</div>
     {% endif %}
 
     <div class="job-actions mt-4">

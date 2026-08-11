@@ -427,6 +427,17 @@ class LeadDatabase:
         else:
             return "source = :src_param", {"src_param": s}
 
+    # Cột được phép sort từ UI (whitelist để tránh SQL injection qua query param).
+    SORTABLE_COLUMNS = {
+        "name": "name",
+        "phone": "phone_normalized",
+        "source": "source",
+        "collector_user": "collector_user",
+        "address": "address",
+        "status": "status",
+        "collected_at": "collected_at",
+    }
+
     def get_leads(
         self,
         source: Optional[str] = None,
@@ -437,6 +448,8 @@ class LeadDatabase:
         offset: int = 0,
         search: Optional[str] = None,
         search_mode: str = "fuzzy",
+        sort_by: Optional[str] = None,
+        sort_dir: str = "asc",
     ) -> List[Lead]:
         """Truy vấn leads với filter và tìm kiếm (gần đúng, trùng 1 phần, chính xác)."""
         conditions = []
@@ -464,6 +477,12 @@ class LeadDatabase:
             params.update(s_params)
             if order_score:
                 order_clause = f"ORDER BY {order_score} collected_at DESC"
+
+        # Sort theo cột do người dùng chọn (bấm tiêu đề cột) — ưu tiên hơn thứ hạng tìm kiếm.
+        sort_col = self.SORTABLE_COLUMNS.get((sort_by or "").strip())
+        if sort_col:
+            direction = "DESC" if (sort_dir or "").lower() == "desc" else "ASC"
+            order_clause = f"ORDER BY {sort_col} {direction}, collected_at DESC"
 
         where = "WHERE " + " AND ".join(conditions) if conditions else ""
         sql = f"""
@@ -558,12 +577,26 @@ class LeadDatabase:
                 "SELECT COUNT(*) FROM leads WHERE date(collected_at) = date('now')"
             ).fetchone()[0]
 
+        by_source_map = {r["source"]: r["cnt"] for r in by_source}
+        # Nhóm nguồn theo prefix để không bỏ sót các source key mới/khác nhau
+        # (vd: "google_maps_details", "google_maps_comment", "google_maps"...).
+        google_maps_total = sum(
+            cnt for src, cnt in by_source_map.items() if src.startswith("google_maps")
+        )
+        facebook_total = sum(
+            cnt for src, cnt in by_source_map.items() if src.startswith("fb_")
+        )
+
         return {
             "total": total,
             "today": today,
-            "by_source": {r["source"]: r["cnt"] for r in by_source},
+            "by_source": by_source_map,
             "by_status": {r["status"]: r["cnt"] for r in by_status},
             "by_carrier": {r["carrier"]: r["cnt"] for r in by_carrier},
+            "by_source_group": {
+                "google_maps": google_maps_total,
+                "facebook": facebook_total,
+            },
         }
 
     def get_all_for_export(

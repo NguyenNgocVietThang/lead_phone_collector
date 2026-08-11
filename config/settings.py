@@ -25,6 +25,9 @@ class Settings:
     # ── Database ───────────────────────────────────────────────────────────
     DATABASE_PATH: Path = BASE_DIR / os.getenv("DATABASE_PATH", "data/leads.db")
 
+    # Múi giờ hiển thị/lưu thời gian nghiệp vụ. Việt Nam dùng UTC+7 quanh năm.
+    APP_UTC_OFFSET_HOURS: float = float(os.getenv("APP_UTC_OFFSET_HOURS", "7"))
+
     # ── Google Sheets ──────────────────────────────────────────────────────
     GOOGLE_SHEETS_CREDENTIALS_FILE: str = os.getenv(
         "GOOGLE_SHEETS_CREDENTIALS_FILE", "config/google-service-account.json"

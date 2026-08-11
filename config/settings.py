@@ -84,7 +84,7 @@ class Settings:
 
     # ── Flask ──────────────────────────────────────────────────────────────
     FLASK_SECRET_KEY: str = os.getenv("FLASK_SECRET_KEY", "dev-secret-change-in-production")
-    FLASK_PORT: int = int(os.getenv("FLASK_PORT", "5000"))
+    FLASK_PORT: int = int(os.getenv("PORT", os.getenv("FLASK_PORT", "5000")))
     FLASK_DEBUG: bool = os.getenv("FLASK_DEBUG", "false").lower() == "true"
 
     # ── Logging ────────────────────────────────────────────────────────────

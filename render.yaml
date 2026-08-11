@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: lead-phone-collector
+    env: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: FLASK_SECRET_KEY
+        generateValue: true
+      - key: PLAYWRIGHT_HEADLESS
+        value: "true"
+      - key: APP_BASE_URL
+        sync: false
+    disk:
+      name: lead-data
+      mountPath: /app/data
+      sizeGB: 1

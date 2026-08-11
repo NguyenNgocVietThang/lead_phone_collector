@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    container_name: lead_phone_collector
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_SECRET_KEY=change-this-to-a-very-secret-random-string
+      - APP_BASE_URL=http://localhost:5000
+      - PLAYWRIGHT_HEADLESS=true
+      - PORT=5000
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config:/app/config
+    restart: unless-stopped

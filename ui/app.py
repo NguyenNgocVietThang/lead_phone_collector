@@ -33,6 +33,7 @@ from flask import (
     Flask, render_template, request, jsonify, redirect,
     url_for, send_file, flash, session, abort,
 )
+from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from config.settings import settings
@@ -49,6 +50,12 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
+# Render (và các PaaS khác) chấm dứt TLS ở tầng proxy rồi forward vào container
+# bằng HTTP thường, kèm header X-Forwarded-Proto/Host. Nếu không có ProxyFix,
+# Flask tưởng request là HTTP nên url_for(_external=True) sinh ra redirect_uri
+# dạng "http://..." thay vì "https://...", khiến Google OAuth báo
+# redirect_uri_mismatch dù redirect URI đã đăng ký đúng trên Google Console.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 app.secret_key = settings.FLASK_SECRET_KEY
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,

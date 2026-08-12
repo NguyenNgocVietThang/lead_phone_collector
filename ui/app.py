@@ -23,7 +23,10 @@ import threading
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit, urlunsplit
 
-from authlib.integrations.base_client.errors import OAuthError
+from authlib.integrations.base_client.errors import (
+    MismatchingStateError,
+    OAuthError,
+)
 from authlib.integrations.flask_client import OAuth
 
 from flask import (
@@ -267,14 +270,17 @@ def oauth_login(provider: str):
         return redirect(url_for("login"))
 
     session["oauth_next"] = _safe_next_url(request.args.get("next"))
-    redirect_uri = f"{settings.APP_BASE_URL}/auth/{provider}/callback"
-    # Ghi log redirect_ui để dễ đối chiếu với Authorized redirect URI đã đăng ký
-    # tại Google Cloud Console / Meta for Developers khi gặp lỗi "redirect_uri_mismatch".
+    # Xây redirect_uri bằng url_for để đảm bảo khớp với route callback.
+    redirect_uri = url_for("oauth_callback", provider=provider, _external=True)
     logger.info("Bắt đầu OAuth %s, redirect_uri=%s", provider, redirect_uri)
     client = oauth.create_client(provider)
     if client is None:
         abort(500, description="OAuth provider chưa được khởi tạo.")
-    return client.authorize_redirect(redirect_uri)
+    # Google OpenID Connect yêu cầu nonce; Facebook thì không cần.
+    kwargs: dict = {}
+    if provider == "google":
+        kwargs["nonce"] = secrets.token_urlsafe(16)
+    return client.authorize_redirect(redirect_uri, **kwargs)
 
 
 @app.route("/auth/<provider>/callback", methods=["GET"])
@@ -284,6 +290,14 @@ def oauth_callback(provider: str):
     if provider not in {"google", "facebook"}:
         abort(404)
 
+    # Kiểm tra nếu Google trả lỗi trực tiếp trên URL (ví dụ: redirect_uri_mismatch)
+    error_code = request.args.get("error")
+    if error_code:
+        error_desc = request.args.get("error_description", error_code)
+        logger.warning("OAuth %s callback nhận lỗi từ provider: %s — %s", provider, error_code, error_desc)
+        flash(f"Đăng nhập {provider.title()} bị từ chối: {error_desc}", "error")
+        return redirect(url_for("login"))
+
     next_url = _safe_next_url(session.pop("oauth_next", None))
     client = oauth.create_client(provider)
     if client is None:
@@ -292,7 +306,10 @@ def oauth_callback(provider: str):
     try:
         token = client.authorize_access_token()
         if provider == "google":
-            profile = token.get("userinfo") or client.userinfo(token=token)
+            # Lấy userinfo từ id_token (đã được decode trong token) hoặc gọi endpoint
+            profile = token.get("userinfo")
+            if not profile:
+                profile = client.userinfo(token=token)
             verified = profile.get("email_verified")
             if verified not in {True, "true", "True", 1}:
                 flash("Google chưa xác minh địa chỉ email của tài khoản này.", "error")
@@ -316,12 +333,16 @@ def oauth_callback(provider: str):
         _set_user_session(user, provider)
         flash(f"Đăng nhập {provider.title()} thành công!", "success")
         return redirect(next_url)
+    except MismatchingStateError:
+        logger.warning("OAuth %s: state không khớp (có thể session hết hạn hoặc mở lại link cũ).", provider)
+        flash("Phiên đăng nhập đã hết hạn. Vui lòng thử lại.", "error")
     except OAuthError as exc:
-        logger.warning("OAuth %s bị từ chối hoặc callback không hợp lệ: %s", provider, exc.error)
+        logger.warning("OAuth %s bị từ chối: %s — %s", provider, exc.error, exc.description)
+        flash(f"Đăng nhập {provider.title()} thất bại: {exc.description or exc.error}", "error")
     except Exception as exc:
-        logger.error("Không thể hoàn tất OAuth %s (%s).", provider, type(exc).__name__)
+        logger.error("Không thể hoàn tất OAuth %s: %s", provider, exc, exc_info=True)
+        flash(f"Không thể đăng nhập bằng {provider.title()}. Lỗi: {exc}", "error")
 
-    flash(f"Không thể đăng nhập bằng {provider.title()}. Vui lòng thử lại.", "error")
     return redirect(url_for("login"))
 
 

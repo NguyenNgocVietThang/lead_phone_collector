@@ -191,9 +191,10 @@ class LeadDatabase:
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         """Tạo connection với row_factory và hàm UNACCENT tùy chỉnh."""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=30)
         conn.row_factory = sqlite3.Row
         conn.create_function("UNACCENT", 1, remove_accents)
+        conn.execute("PRAGMA busy_timeout=30000;")
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA foreign_keys=ON;")
         try:
